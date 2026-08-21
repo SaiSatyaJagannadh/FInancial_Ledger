@@ -100,12 +100,17 @@ class Entry:
         )
 
     def to_row(self) -> list[str]:
-        """Serialise for the sheet, in COLUMNS order."""
+        """Serialise for the sheet, in COLUMNS order.
+
+        The amount is rendered by integer divmod, not `paise / 100`: this is the
+        persistence boundary, and it is the one place a float must not appear.
+        """
+        whole, frac = divmod(self.amount_paise, 100)
         return [
             self.date.isoformat(),
             self.person,
             self.ledger,
             self.direction.value,
-            f"{self.amount_paise / 100:.2f}",
+            f"{whole}.{frac:02d}",
             self.note,
         ]

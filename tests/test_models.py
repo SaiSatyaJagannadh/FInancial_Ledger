@@ -100,3 +100,14 @@ def test_to_row_round_trips():
     again = Entry.from_row(dict(zip(["date", "person", "ledger", "direction", "amount", "note"], row)))
     assert again.amount_paise == entry.amount_paise
     assert again.date == entry.date
+
+
+def test_to_row_is_exact_for_large_amounts():
+    """The written cell must not depend on float division at the store boundary."""
+    entry = make(amount_paise=9_007_199_254_740_993)  # beyond exact float integers
+    assert entry.to_row()[4] == "90071992547409.93"
+
+
+@pytest.mark.parametrize("paise,text", [(1, "0.01"), (99, "0.99"), (100, "1.00"), (12345, "123.45")])
+def test_to_row_amount_formatting(paise, text):
+    assert make(amount_paise=paise).to_row()[4] == text

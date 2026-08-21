@@ -1,108 +1,101 @@
-# Financial Ledger
+# Personal Ledger
 
-A double-entry ledger for personal or small-business books, with an AI layer
-(NVIDIA NIM) that categorizes imported transactions and answers questions in
-plain English.
+A ledger for money lent to and repaid by people you know — family, friends. It
+answers one question: **who owes me what.**
 
-The reason it is double entry: a single-table "transactions with a category"
-ledger cannot prove it is correct. Here every movement of money balances to
-zero, so the books are self-checking — `/health` reports the trial balance, and
-if it is ever non-zero something is wrong and you find out immediately.
+Streamlit app, Google Sheet as the store, amounts in ₹.
 
-## Two rules the AI layer follows
+![demo mode](https://img.shields.io/badge/no%20setup-runs%20in%20demo%20mode-blue)
 
-1. **The model never does arithmetic.** For a question it picks *filters* —
-   which accounts, which dates, which description text. The database sums the
-   postings. A wrong filter is visible in the response; a wrong total would
-   quietly corrupt your understanding of your own money.
-2. **No API key is not an error.** Without `NVIDIA_API_KEY`, categorization
-   falls back to your rules plus a local token heuristic, and the Ask page
-   explains that it is off. Everything else works unchanged.
-
-## Quick start
+## Run it
 
 ```bash
-# backend
-cd backend
-uv venv --python 3.11 .venv
-uv pip install -e ".[dev]"
-cp .env.example .env          # optional: add your NVIDIA key
-.venv/bin/python seed.py --reset   # 8 months of demo books
-.venv/bin/python -m uvicorn app.main:app --port 8000
-
-# frontend, in another shell
-cd frontend
-npm install
-npm run dev                   # http://localhost:5173
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/streamlit run app.py
 ```
 
-Or run both with `./dev.sh`.
+That is the whole setup. With no credentials it opens in **demo mode** against
+sample data and says so — that is how you look at it before deciding whether to
+connect a sheet.
 
-API docs are at http://localhost:8000/docs.
+## Connect your own sheet
 
-## How money is stored
+1. Create a Google Cloud **service account** and download its JSON key.
+2. `cp .streamlit/secrets.toml.example .streamlit/secrets.toml` and paste the
+   JSON fields in, plus your sheet's URL.
+3. **Share the sheet with the service account's `client_email`** — this is the
+   step people miss; without it the app sees a permission error and falls back
+   to demo data.
 
-Everything internal is a **signed integer in minor units** (cents). `Decimal`
-appears only when parsing input and formatting output; no float ever touches a
-balance. Binary floating point cannot represent `0.10` exactly, and a ledger
-that drifts by a cent per thousand rows is a ledger nobody can trust.
+The sheet needs one header row:
 
-Debits are positive, credits negative. `asset` and `expense` accounts are
-debit-normal; `liability`, `equity` and `income` are credit-normal, so reports
-flip their sign to show income of $500 as `+500.00` rather than `-500.00`.
+```
+date | person | ledger | direction | amount | note
+```
 
-## The invariants
+An empty sheet gets that header written the first time you save.
 
-Enforced in `backend/app/ledger.py`, which is the only write path for postings:
+## The model
 
-1. A transaction has at least two postings.
-2. Postings sum to zero **per currency** — a EUR leg cannot be netted against a
-   USD leg to fake a balanced entry.
-3. Postings are immutable; editing a transaction replaces every leg.
-4. An account with history is archived, never deleted.
+- A **ledger** is one running arrangement with one person — a bike loan, a rent
+  float. A person can have several; they are tracked separately and summed
+  together.
+- An **entry** is one movement: `given` (money out to them) or `received`
+  (money back).
+- **Net owed = given − received.** Positive means they owe you, negative means
+  you owe them, and it is allowed to go negative because that is a real state.
+- A ledger is **open** while its net is non-zero. Pay it off and it stops being
+  counted, with no status column to maintain.
 
-## Importing
+Amounts are always positive; `direction` carries the sign. A negative amount is
+rejected rather than quietly double-negating into a repayment.
 
-`Import` takes a CSV from a bank or card. Columns are detected by name (date /
-posted date / transaction date, description / payee / merchant, and either an
-amount column or a debit/credit pair). Nothing is written until you confirm the
-preview.
+## Money
 
-Dedupe is a content hash of date + description + amount **plus an occurrence
-counter**, so two identical $3.50 coffees on the same day are both kept while
-re-importing the same file adds nothing. Rows nobody could categorize park in a
-holding account rather than being guessed at.
+Everything internal is **integer paise**. Floats never touch a total, including
+at the sheet boundary — `0.1 + 0.2` is not `0.3` in binary floating point, and a
+ledger that drifts is worthless.
+
+Figures are formatted with Indian grouping: **₹6,76,800.00**, not ₹676,800.00.
+
+## Reading a messy sheet
+
+Real sheets are filled in by hand, so reads tolerate:
+
+- header case and stray spaces (`  Date `, `PERSON`)
+- several date formats (`2026-01-24`, `24/01/2026`, `24 Jan 2026`)
+- the words people actually type for direction — `gave`, `got`, `repaid`, `lent`
+- blank spacer rows
+- amounts written `1,200`, `₹1200`, `Rs 1200`
+
+A row that still cannot be read is reported **by row number** rather than taking
+the rest of the sheet down with it. If the sheet is unreachable the app shows
+demo data and says so, because an empty page would read as "nobody owes you
+anything".
 
 ## Layout
 
 ```
-backend/app/
-  ledger.py      double-entry service — the invariants live here
-  reports.py     balance sheet, income statement, trends (all SQL)
-  importer.py    CSV parsing, column detection, dedupe
-  rules.py       deterministic pattern -> account matching
-  ai.py          NVIDIA NIM client, query planning, fallbacks
-  routers/       accounts, transactions, rules, imports, reports, ai
-frontend/src/
-  pages/         Dashboard, Transactions, Accounts, Import,
-                 Categorize, Reports, Ask
+app.py                  dashboard
+pages/1_Add_Entry.py    entry form
+ledger/
+  money.py              paise <-> ₹, Indian grouping
+  models.py             Entry, validation, direction
+  compute.py            every aggregate the UI shows
+  store.py              Sheets read/append + demo fallback
+  demo.py               deterministic sample data
+  ui.py                 shared Streamlit pieces
 ```
+
+`compute.py` holds all the arithmetic; the UI formats but never sums, so the
+tests cover exactly what is on screen.
 
 ## Tests
 
 ```bash
-cd backend  && .venv/bin/python -m pytest      # 79 tests
-cd frontend && npx vitest run                  # 21 tests
+.venv/bin/python -m pytest
 ```
 
-The backend suite covers the invariants, as-of balances, subtree rollup with a
-cycle guard, CSV round trips, and the AI layer's failure modes — hallucinated
-account ids are dropped, a model outage falls back to the heuristic, and a
-total the model invents never reaches the response.
-
-## A note on models
-
-`meta/llama-3.1-8b-instruct` is the default because it is verified responsive on
-this endpoint. Some larger models are listed by `/v1/models` but accept a chat
-request and never reply. Every call carries a timeout so that failure degrades
-to the local fallback instead of hanging.
+102 tests: money parsing and Indian formatting, entry validation, the
+aggregates, filter consistency, messy-sheet tolerance, and an end-to-end
+load → append → reload over an in-memory sheet.
