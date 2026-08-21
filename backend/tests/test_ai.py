@@ -231,3 +231,59 @@ def test_narrate_falls_back_to_the_computed_figure_if_the_model_dies(monkeypatch
     monkeypatch.setattr(ai_mod, "_complete", lambda *a, **k: (_ for _ in ()).throw(RuntimeError()))
     text = ai_mod.narrate("q", {}, 123456, [{"label": "a", "amount_minor": 123456}])
     assert "1,234.56" in text
+
+
+# ------------------------------------------------- narration cannot misstate
+
+
+@pytest.mark.parametrize(
+    "sentence,ok",
+    [
+        ("You spent $6,112.97 on groceries this year.", True),
+        ("You spent 6112.97 on groceries.", True),
+        ("Groceries came to $6112.97.", True),
+        ("You spent $611,297 on groceries this year.", False),   # cents read as dollars
+        ("The transport amount is 611297.", False),              # raw minor units leaked
+        ("You spent $6,112.98 on groceries.", False),            # off by a cent
+        ("You spent a lot on groceries.", False),                # no figure at all
+    ],
+)
+def test_states_the_total_rejects_a_misstated_figure(sentence, ok):
+    assert ai_mod.states_the_total(sentence, 611297) is ok
+
+
+def test_whole_dollar_totals_may_drop_the_cents():
+    assert ai_mod.states_the_total("You earned $5,200 last month.", 520000)
+    assert ai_mod.states_the_total("You earned $5200 last month.", 520000)
+    assert ai_mod.states_the_total("You earned $5,200.00 last month.", 520000)
+    assert not ai_mod.states_the_total("You earned $520,000 last month.", 520000)
+
+
+def test_narrate_replaces_a_mangled_sentence_with_the_computed_figure(monkeypatch):
+    """The exact bug this guards: the model rendering 6112.97 as $611,297."""
+    monkeypatch.setattr(ai_mod, "_complete", lambda *a, **k: "You spent $611,297 on groceries.")
+    text = ai_mod.narrate("q", {}, 611297, [{"label": "total", "amount_minor": 611297}])
+    assert "611,297" not in text
+    assert "$6,112.97" in text
+
+
+def test_narrate_keeps_a_correct_sentence(monkeypatch):
+    monkeypatch.setattr(ai_mod, "_complete", lambda *a, **k: "You spent $6,112.97 on groceries.")
+    text = ai_mod.narrate("q", {}, 611297, [{"label": "total", "amount_minor": 611297}])
+    assert text == "You spent $6,112.97 on groceries."
+
+
+def test_narrate_never_shows_the_model_raw_minor_units(monkeypatch):
+    """The root cause: rows carry amount_minor, and the model echoed it."""
+    seen = {}
+
+    def capture(messages, **kwargs):
+        seen["prompt"] = messages[-1]["content"]
+        return "You spent $6,112.97 on groceries."
+
+    monkeypatch.setattr(ai_mod, "_complete", capture)
+    ai_mod.narrate(
+        "q", {}, 611297, [{"label": "expenses:food:groceries", "amount_minor": 611297}]
+    )
+    assert "611297" not in seen["prompt"]
+    assert "$6,112.97" in seen["prompt"]

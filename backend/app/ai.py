@@ -288,18 +288,55 @@ def run_query(db: Session, plan: dict) -> tuple[int, list[dict]]:
     return total, listing[:50]
 
 
+def format_usd(minor: int) -> str:
+    """The one rendering of a figure that goes anywhere near the model."""
+    return f"${minor / 100:,.2f}"
+
+
+def states_the_total(text: str, total_minor: int) -> bool:
+    """True when the sentence actually contains the total we computed.
+
+    A small model will happily write "$611,297" for 6112.97, or echo raw cents.
+    The computed figure is shown separately in the UI, but the prose is what a
+    person reads first, so a sentence that misstates it is not usable.
+    """
+    target = format_usd(total_minor)
+    plain = target.lstrip("$")
+    candidates = {target, plain, plain.replace(",", "")}
+    if plain.endswith(".00"):
+        # "$5,200.00" may reasonably be written "$5,200" or "$5200".
+        whole = plain[:-3]
+        candidates |= {f"${whole}", whole, whole.replace(",", "")}
+    return any(c in text for c in candidates)
+
+
 def narrate(question: str, plan: dict, total_minor: int, rows: list[dict]) -> str:
-    """Ask the model to phrase the answer — using only the numbers we computed."""
-    facts = json.dumps({"total": total_minor / 100, "breakdown": rows[:15]}, indent=None)
+    """Ask the model to phrase the answer — using only the numbers we computed.
+
+    The model is handed pre-formatted currency strings and never raw minor
+    units, and its sentence is rejected unless it repeats our total verbatim.
+    """
+    fallback = f"Total: {format_usd(total_minor)} across {len(rows)} group(s)."
+    facts = json.dumps(
+        {
+            "total": format_usd(total_minor),
+            "breakdown": [
+                {"label": r["label"], "amount": format_usd(r["amount_minor"])}
+                for r in rows[:15]
+            ],
+        },
+        indent=None,
+    )
     try:
-        return _complete(
+        text = _complete(
             [
                 {
                     "role": "system",
                     "content": (
-                        "You state a ledger result in 1-3 plain sentences. Use ONLY the "
-                        "numbers given to you. Never recompute, never add figures that "
-                        "are not in the data. Amounts are US dollars."
+                        "You state a ledger result in 1-3 plain sentences. Copy the "
+                        "amounts EXACTLY as written, including the dollar sign, commas "
+                        "and cents. Never rescale, reformat, round, or recompute a "
+                        "figure, and never introduce one that is not in the data."
                     ),
                 },
                 {"role": "user", "content": f"Question: {question}\nData: {facts}"},
@@ -309,7 +346,11 @@ def narrate(question: str, plan: dict, total_minor: int, rows: list[dict]) -> st
         ).strip()
     except Exception:
         # The numbers are already correct; a phrasing failure must not lose them.
-        return f"Total: ${total_minor / 100:,.2f} across {len(rows)} group(s)."
+        return fallback
+
+    # Silently dropping a mangled sentence beats showing someone the wrong
+    # magnitude of their own money.
+    return text if states_the_total(text, total_minor) else fallback
 
 
 def default_window(today: date) -> tuple[date, date]:
