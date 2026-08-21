@@ -116,8 +116,8 @@ export const api = {
     request<BalanceSheet>(`/reports/balance-sheet${qs({ as_of: asOf })}`),
   incomeStatement: (start?: string, end?: string) =>
     request<IncomeStatement>(`/reports/income-statement${qs({ start, end })}`),
-  spendByCategory: (start?: string, end?: string) =>
-    request<CategorySpend[]>(`/reports/spend-by-category${qs({ start, end })}`),
+  spendByCategory: (start?: string, end?: string, rollup = true) =>
+    request<CategorySpend[]>(`/reports/spend-by-category${qs({ start, end, rollup })}`),
   monthly: (months = 12) => request<MonthlyPoint[]>(`/reports/monthly${qs({ months })}`),
   netWorth: (months = 12) => request<NetWorthPoint[]>(`/reports/net-worth${qs({ months })}`),
 

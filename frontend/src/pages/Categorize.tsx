@@ -22,7 +22,8 @@ export default function Categorize() {
       setChoices(
         Object.fromEntries(data.suggestions.map((s: Suggestion) => [s.transaction_id, s.account_id])),
       )
-      setApplied(null)
+      // Deliberately keeps `applied` — applying triggers a re-suggest, and
+      // clearing here would wipe the confirmation the user just earned.
     },
   })
 

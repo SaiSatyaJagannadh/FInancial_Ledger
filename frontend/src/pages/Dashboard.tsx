@@ -21,7 +21,10 @@ export default function Dashboard() {
   const balanceSheet = useQuery({ queryKey: ['balance-sheet'], queryFn: () => api.balanceSheet() })
   const monthly = useQuery({ queryKey: ['monthly'], queryFn: () => api.monthly(12) })
   const netWorth = useQuery({ queryKey: ['net-worth'], queryFn: () => api.netWorth(12) })
-  const spend = useQuery({ queryKey: ['spend'], queryFn: () => api.spendByCategory() })
+  const spend = useQuery({
+    queryKey: ['spend', 'leaf'],
+    queryFn: () => api.spendByCategory(undefined, undefined, false),
+  })
   const recent = useQuery({
     queryKey: ['recent'],
     queryFn: () => api.transactions({ limit: 8 }),
@@ -98,8 +101,8 @@ export default function Dashboard() {
                       color: 'var(--text)',
                     }}
                   />
-                  <Bar dataKey="Income" fill="#1a7f4b" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="Expenses" fill="#c0653b" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="Income" fill="#1a7f4b" radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                  <Bar dataKey="Expenses" fill="#c0653b" radius={[3, 3, 0, 0]} isAnimationActive={false} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -136,6 +139,7 @@ export default function Dashboard() {
                     stroke="#2f6fb0"
                     strokeWidth={2}
                     dot={false}
+                    isAnimationActive={false}
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -173,7 +177,7 @@ export default function Dashboard() {
                       color: 'var(--text)',
                     }}
                   />
-                  <Bar dataKey="amount" radius={[0, 3, 3, 0]}>
+                  <Bar dataKey="amount" radius={[0, 3, 3, 0]} isAnimationActive={false}>
                     {topSpend.map((_, index) => (
                       <Cell key={index} fill={CHART_COLORS[index % CHART_COLORS.length]} />
                     ))}

@@ -49,6 +49,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+@layer components {
 /* Financial figures line up only if the digits are the same width. */
 .tnum { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 
@@ -106,3 +107,4 @@ th {
 }
 td { padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--line); font-size: 0.9rem; }
 tbody tr:last-child td { border-bottom: none; }
+}
