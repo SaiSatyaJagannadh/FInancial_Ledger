@@ -4,6 +4,115 @@ import { api } from '../api'
 import { Badge, Empty, ErrorNote, Panel } from '../components/ui'
 import type { Suggestion } from '../types'
 
+function Rules({ categories }: { categories: { id: number; code: string }[] }) {
+  const queryClient = useQueryClient()
+  const [draft, setDraft] = useState({ pattern: '', match_type: 'contains', account_id: '' })
+
+  const rules = useQuery({ queryKey: ['rules'], queryFn: api.rules })
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['rules'] })
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.createRule({
+        pattern: draft.pattern,
+        match_type: draft.match_type,
+        account_id: Number(draft.account_id),
+      }),
+    onSuccess: () => {
+      setDraft({ ...draft, pattern: '' })
+      invalidate()
+    },
+  })
+  const remove = useMutation({ mutationFn: api.deleteRule, onSuccess: invalidate })
+
+  const byId = new Map(categories.map((a) => [a.id, a.code]))
+
+  return (
+    <Panel title="Rules">
+      <div className="px-4 py-3 text-xs muted border-b border-[var(--line)]">
+        A rule matches a transaction description and always wins over the model, so
+        anything you teach it here never costs a model call again.
+      </div>
+      <form
+        className="p-4 grid gap-3 sm:grid-cols-[1fr_auto_1fr_auto]"
+        onSubmit={(event) => {
+          event.preventDefault()
+          create.mutate()
+        }}
+      >
+        <label className="grid gap-1">
+          <span className="text-xs muted">When the description</span>
+          <input
+            className="field"
+            required
+            placeholder="WHOLE FOODS"
+            value={draft.pattern}
+            onChange={(e) => setDraft({ ...draft, pattern: e.target.value })}
+          />
+        </label>
+        <label className="grid gap-1">
+          <span className="text-xs muted">Match</span>
+          <select
+            className="field"
+            value={draft.match_type}
+            onChange={(e) => setDraft({ ...draft, match_type: e.target.value })}
+          >
+            <option value="contains">contains</option>
+            <option value="regex">regex</option>
+          </select>
+        </label>
+        <label className="grid gap-1">
+          <span className="text-xs muted">Categorize as</span>
+          <select
+            className="field"
+            required
+            value={draft.account_id}
+            onChange={(e) => setDraft({ ...draft, account_id: e.target.value })}
+          >
+            <option value="">select…</option>
+            {categories.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.code}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="btn btn-primary self-end" disabled={create.isPending}>
+          Add rule
+        </button>
+        <div className="sm:col-span-4">
+          <ErrorNote error={create.error ?? remove.error} />
+        </div>
+      </form>
+
+      {rules.data?.length ? (
+        <table>
+          <tbody>
+            {rules.data.map((rule) => (
+              <tr key={rule.id}>
+                <td className="tnum text-xs">{rule.pattern}</td>
+                <td>
+                  <Badge>{rule.match_type}</Badge>
+                </td>
+                <td className="text-xs muted">
+                  {byId.get(rule.account_id) ?? `#${rule.account_id}`}
+                </td>
+                <td className="text-right">
+                  <button className="btn text-xs" onClick={() => remove.mutate(rule.id)}>
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <Empty>{rules.isLoading ? 'Loading…' : 'No rules yet.'}</Empty>
+      )}
+    </Panel>
+  )
+}
+
 const SOURCE_TONE: Record<string, string> = { rule: 'good', llm: 'neutral', heuristic: 'neutral' }
 
 export default function Categorize() {
@@ -137,6 +246,8 @@ export default function Categorize() {
         )}
         <ErrorNote error={suggest.error ?? apply.error} />
       </Panel>
+
+      <Rules categories={categories} />
     </div>
   )
 }
