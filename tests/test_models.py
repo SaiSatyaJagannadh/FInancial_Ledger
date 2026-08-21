@@ -1,0 +1,102 @@
+from datetime import date
+
+import pytest
+
+from ledger.models import Direction, Entry, EntryError, parse_date, parse_direction
+
+
+def make(**kw):
+    base = dict(
+        date=date(2026, 1, 1),
+        person="Brother",
+        ledger="Bike loan",
+        direction=Direction.given,
+        amount_paise=10_000,
+    )
+    base.update(kw)
+    return Entry(**base)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("2026-01-24", date(2026, 1, 24)),
+        ("24/01/2026", date(2026, 1, 24)),
+        ("24-01-2026", date(2026, 1, 24)),
+        ("24 Jan 2026", date(2026, 1, 24)),
+        (date(2026, 1, 24), date(2026, 1, 24)),
+    ],
+)
+def test_parse_date(raw, expected):
+    assert parse_date(raw) == expected
+
+
+def test_parse_date_rejects_nonsense():
+    with pytest.raises(EntryError, match="unrecognised date"):
+        parse_date("sometime last year")
+
+
+@pytest.mark.parametrize("word", ["given", "Gave", "LENT", "out", "paid"])
+def test_direction_given_synonyms(word):
+    assert parse_direction(word) is Direction.given
+
+
+@pytest.mark.parametrize("word", ["received", "got", "repaid", "IN", "returned"])
+def test_direction_received_synonyms(word):
+    assert parse_direction(word) is Direction.received
+
+
+def test_direction_rejects_unknown():
+    with pytest.raises(EntryError, match="must be 'given' or 'received'"):
+        parse_direction("maybe")
+
+
+def test_signed_amount_carries_the_direction():
+    assert make(direction=Direction.given).signed_paise == 10_000
+    assert make(direction=Direction.received).signed_paise == -10_000
+
+
+def test_amount_must_be_positive():
+    # Direction already carries the sign; a negative amount would double-negate.
+    with pytest.raises(EntryError, match="must be positive"):
+        make(amount_paise=-10_000)
+    with pytest.raises(EntryError, match="must be positive"):
+        make(amount_paise=0)
+
+
+@pytest.mark.parametrize("field", ["person", "ledger"])
+def test_required_text_fields(field):
+    with pytest.raises(EntryError, match=f"{field} is required"):
+        make(**{field: "   "})
+
+
+def test_from_row_reads_a_sheet_row():
+    entry = Entry.from_row(
+        {
+            "date": "24/01/2026",
+            "person": " Father ",
+            "ledger": "House repair",
+            "direction": "gave",
+            "amount": "1,200.50",
+            "note": "UPI",
+        },
+        row_number=7,
+    )
+    assert entry.person == "Father"
+    assert entry.amount_paise == 120_050
+    assert entry.direction is Direction.given
+    assert entry.row == 7
+
+
+def test_from_row_names_the_missing_column():
+    with pytest.raises(EntryError, match="missing column"):
+        Entry.from_row({"date": "2026-01-01", "person": "X"})
+
+
+def test_to_row_round_trips():
+    entry = make(amount_paise=120_050, note="UPI")
+    row = entry.to_row()
+    assert row == ["2026-01-01", "Brother", "Bike loan", "given", "1200.50", "UPI"]
+    again = Entry.from_row(dict(zip(["date", "person", "ledger", "direction", "amount", "note"], row)))
+    assert again.amount_paise == entry.amount_paise
+    assert again.date == entry.date

@@ -1,0 +1,11 @@
+streamlit>=1.36
+pandas>=2.2
+altair>=5.3
+
+# Only needed to talk to a real Google Sheet. Demo mode does not import them,
+# so the app still runs if these fail to install.
+gspread>=6.1
+google-auth>=2.30
+# cryptography 45+ ships no wheel for some platforms and then tries to build a
+# Rust/OpenSSL extension from source. Pin below that so a plain pip install works.
+cryptography<45

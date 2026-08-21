@@ -437,3 +437,7 @@ backend/*.db-shm
 backend/*.egg-info/
 frontend/node_modules/
 frontend/dist/
+.streamlit/secrets.toml
+.venv/
+__pycache__/
+.pytest_cache/
