@@ -46,3 +46,29 @@ def accounts(db):
     for acct in made.values():
         db.refresh(acct)
     return made
+
+
+@pytest.fixture()
+def ai_key(monkeypatch):
+    """Pretend a NVIDIA key is configured.
+
+    Setting the env var and clearing the settings cache is the only reliable
+    lever: get_settings is lru_cached, so patching its __wrapped__ never reaches
+    the value the routers actually read.
+    """
+    from app.config import get_settings
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "test-key-not-used-for-real-calls")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture()
+def no_ai_key(monkeypatch):
+    from app.config import get_settings
+
+    monkeypatch.setenv("NVIDIA_API_KEY", "")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
