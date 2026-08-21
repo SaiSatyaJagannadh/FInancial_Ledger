@@ -427,3 +427,11 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# project
+backend/.venv/
+backend/*.db
+backend/*.db-wal
+backend/*.db-shm
+.env
+backend/*.egg-info/
