@@ -3,7 +3,7 @@
 A ledger for money lent to and repaid by people you know — family, friends. It
 answers one question: **who owes me what.**
 
-Streamlit app, Google Sheet as the store, amounts in ₹.
+Streamlit app, Google Sheet as the store, with **rupees and dollars in separate tabs**.
 
 ![demo mode](https://img.shields.io/badge/no%20setup-runs%20in%20demo%20mode-blue)
 
@@ -30,10 +30,25 @@ connect a sheet.
 The sheet needs one header row:
 
 ```
-date | person | ledger | direction | amount | note
+date | person | ledger | direction | amount | currency | note
 ```
 
 An empty sheet gets that header written the first time you save.
+
+## Two currencies, never mixed
+
+The dashboard has a tab for **🇮🇳 Indian Rupees** and one for **🇺🇸 US Dollars**.
+Each is a complete, independent view: its own totals, its own people filter, its
+own chart.
+
+They are never added together. ₹40,000 plus $1,000 is not a number without an
+exchange rate that changes every day, so the app declines to invent one —
+`totals()` raises on a mixed list rather than printing something plausible and
+wrong.
+
+Currency is part of a ledger's identity. Lending your brother rupees at home and
+dollars abroad is two arrangements, tracked separately, even if you give them the
+same name.
 
 ## The model
 
@@ -44,6 +59,8 @@ An empty sheet gets that header written the first time you save.
   (money back).
 - **Net owed = given − received.** Positive means they owe you, negative means
   you owe them, and it is allowed to go negative because that is a real state.
+- Each entry carries its **currency**. A sheet written before currency existed
+  reads as rupees, so nothing breaks when you add the column.
 - A ledger is **open** while its net is non-zero. Pay it off and it stops being
   counted, with no status column to maintain.
 
@@ -52,11 +69,12 @@ rejected rather than quietly double-negating into a repayment.
 
 ## Money
 
-Everything internal is **integer paise**. Floats never touch a total, including
+Everything internal is **integer minor units** (paise, cents). Floats never touch a total, including
 at the sheet boundary — `0.1 + 0.2` is not `0.3` in binary floating point, and a
 ledger that drifts is worthless.
 
-Figures are formatted with Indian grouping: **₹6,76,800.00**, not ₹676,800.00.
+Rupees use Indian grouping — **₹6,76,800.00**, not ₹676,800.00. Dollars use the
+Western convention, **$676,800.00**. Each tab formats with its own.
 
 ## Reading a messy sheet
 
@@ -66,7 +84,8 @@ Real sheets are filled in by hand, so reads tolerate:
 - several date formats (`2026-01-24`, `24/01/2026`, `24 Jan 2026`)
 - the words people actually type for direction — `gave`, `got`, `repaid`, `lent`
 - blank spacer rows
-- amounts written `1,200`, `₹1200`, `Rs 1200`
+- amounts written `1,200`, `₹1200`, `Rs 1200`, `$600`
+- currency written `INR`, `usd`, `₹`, `$`, `Rs` — or left blank, meaning rupees
 
 A row that still cannot be read is reported **by row number** rather than taking
 the rest of the sheet down with it. If the sheet is unreachable the app shows
@@ -96,6 +115,7 @@ tests cover exactly what is on screen.
 .venv/bin/python -m pytest
 ```
 
-102 tests: money parsing and Indian formatting, entry validation, the
+128 tests: money parsing and Indian formatting, entry validation, the
 aggregates, filter consistency, messy-sheet tolerance, and an end-to-end
-load → append → reload over an in-memory sheet.
+load → append → reload over an in-memory sheet — plus the currency split: a
+dollar entry never moves a rupee total, and a mixed total raises.

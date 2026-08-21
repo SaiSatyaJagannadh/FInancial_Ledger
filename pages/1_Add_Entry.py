@@ -8,7 +8,7 @@ import streamlit as st
 
 from ledger import store
 from ledger.models import Direction, Entry, EntryError
-from ledger.money import format_inr, to_paise
+from ledger.money import Currency, format_money, to_minor
 from ledger.ui import clear_cache, demo_banner, load_ledger, page_config
 
 NEW = "➕ New…"
@@ -20,9 +20,22 @@ demo_banner(result)
 
 st.title("Add Entry")
 
-people = sorted({e.person for e in result.entries})
+currency = Currency(
+    st.radio(
+        "Currency",
+        [c.value for c in Currency],
+        format_func=lambda v: f"{Currency(v).flag}  {Currency(v).label}",
+        horizontal=True,
+        help="Rupee and dollar ledgers are kept completely separate.",
+    )
+)
+
+# Only offer people and ledgers that exist *in this currency*, so picking USD
+# does not suggest a rupee arrangement that has nothing to do with it.
+in_currency = [e for e in result.entries if e.currency is currency]
+people = sorted({e.person for e in in_currency})
 ledgers_for = {
-    person: sorted({e.ledger for e in result.entries if e.person == person}) for person in people
+    person: sorted({e.ledger for e in in_currency if e.person == person}) for person in people
 }
 
 
@@ -51,7 +64,9 @@ with col_d:
         horizontal=False,
     )
 with col_e:
-    amount_text = st.text_input("Amount (₹)", placeholder="1500")
+    amount_text = st.text_input(
+        f"Amount ({currency.symbol})", placeholder="1500", key=f"amount_{currency.value}"
+    )
 
 note = st.text_input("Note", placeholder="UPI, cash, cheque…")
 
@@ -61,8 +76,8 @@ entry: Entry | None = None
 
 if amount_text.strip():
     try:
-        paise = to_paise(amount_text)
-        if paise <= 0:
+        minor = to_minor(amount_text)
+        if minor <= 0:
             problems.append("Amount must be more than zero — use Direction to say which way.")
         else:
             entry = Entry(
@@ -70,7 +85,8 @@ if amount_text.strip():
                 person=person or "",
                 ledger=ledger_name or "",
                 direction=direction,
-                amount_paise=paise,
+                amount_minor=minor,
+                currency=currency,
                 note=note,
             )
     except ValueError as exc:
@@ -81,7 +97,7 @@ if amount_text.strip():
 if entry is not None:
     verb = "give" if direction is Direction.given else "get back"
     st.info(
-        f"**{format_inr(entry.amount_paise)}** — you {verb} this "
+        f"**{format_money(entry.amount_minor, entry.currency)}** — you {verb} this "
         f"{'to' if direction is Direction.given else 'from'} **{entry.person}** "
         f"on *{entry.ledger}*, dated {entry.date:%d %b %Y}."
     )
@@ -100,7 +116,7 @@ if st.button("Save entry", type="primary", disabled=not ready):
         st.error(f"Could not save: {type(exc).__name__}: {exc}")
     else:
         clear_cache()
-        st.success(f"Saved {format_inr(entry.amount_paise)} for {entry.person}.")
+        st.success(f"Saved {format_money(entry.amount_minor, entry.currency)} for {entry.person}.")
         st.balloons()
 
 st.divider()

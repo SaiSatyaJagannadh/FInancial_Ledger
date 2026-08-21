@@ -5,8 +5,8 @@ import pytest
 from ledger import store
 from ledger.compute import totals
 from ledger.demo import build_demo_entries
-from ledger.models import Direction, Entry
-from ledger.money import to_paise
+from ledger.models import COLUMNS, Direction, Entry
+from ledger.money import Currency, to_minor
 
 CONFIGURED = {
     "gcp_service_account": {"client_email": "x@y.iam.gserviceaccount.com"},
@@ -32,7 +32,9 @@ def test_load_without_credentials_is_demo_mode():
     result = store.load(secrets={})
     assert result.demo is True
     assert result.problems == []
-    assert totals(result.entries).records == 32
+    from ledger.compute import by_currency
+
+    assert totals(by_currency(result.entries, Currency.INR)).records == 32
 
 
 def test_load_falls_back_to_demo_when_the_sheet_is_unreachable(monkeypatch):
@@ -53,16 +55,16 @@ def test_load_reads_rows_from_the_sheet(monkeypatch):
         def get_all_records(self):
             return [
                 {"date": "2026-01-24", "person": "Father", "ledger": "House repair",
-                 "direction": "given", "amount": "1,000", "note": "UPI"},
+                 "direction": "given", "amount": "1,000", "currency": "INR", "note": "UPI"},
                 {"date": "2026-02-01", "person": "Father", "ledger": "House repair",
-                 "direction": "received", "amount": "400", "note": ""},
+                 "direction": "received", "amount": "400", "currency": "INR", "note": ""},
             ]
 
     monkeypatch.setattr(store, "_open_worksheet", lambda _s: FakeSheet())
     result = store.load(secrets=CONFIGURED)
     assert result.demo is False
     assert len(result.entries) == 2
-    assert totals(result.entries).net_paise == to_paise(600)
+    assert totals(result.entries).net_minor == to_minor(600)
 
 
 def test_one_bad_row_does_not_hide_the_good_ones():
@@ -110,7 +112,7 @@ def test_append_refuses_in_demo_mode():
     """Silently discarding a save would be worse than refusing it."""
     entry = Entry(
         date=date(2026, 1, 1), person="A", ledger="L",
-        direction=Direction.given, amount_paise=100,
+        direction=Direction.given, amount_minor=100,
     )
     with pytest.raises(RuntimeError, match="Demo mode"):
         store.append(entry, secrets={})
@@ -121,7 +123,7 @@ def test_append_writes_the_row_in_column_order(monkeypatch):
 
     class FakeSheet:
         def row_values(self, _n):
-            return ["date", "person", "ledger", "direction", "amount", "note"]
+            return list(COLUMNS)
 
         def append_row(self, row, **kwargs):
             written["row"] = row
@@ -129,10 +131,12 @@ def test_append_writes_the_row_in_column_order(monkeypatch):
     monkeypatch.setattr(store, "_open_worksheet", lambda _s: FakeSheet())
     entry = Entry(
         date=date(2026, 1, 24), person="Father", ledger="House repair",
-        direction=Direction.given, amount_paise=120_050, note="UPI",
+        direction=Direction.given, amount_minor=120_050, note="UPI",
     )
     store.append(entry, secrets=CONFIGURED)
-    assert written["row"] == ["2026-01-24", "Father", "House repair", "given", "1200.50", "UPI"]
+    assert written["row"] == [
+        "2026-01-24", "Father", "House repair", "given", "1200.50", "INR", "UPI"
+    ]
 
 
 def test_append_writes_a_header_to_an_empty_sheet(monkeypatch):
@@ -151,7 +155,38 @@ def test_append_writes_a_header_to_an_empty_sheet(monkeypatch):
     monkeypatch.setattr(store, "_open_worksheet", lambda _s: FakeSheet())
     store.append(
         Entry(date=date(2026, 1, 1), person="A", ledger="L",
-              direction=Direction.given, amount_paise=100),
+              direction=Direction.given, amount_minor=100),
         secrets=CONFIGURED,
     )
-    assert calls["header"] == ("A1", [["date", "person", "ledger", "direction", "amount", "note"]])
+    assert calls["header"] == ("A1", [list(COLUMNS)])
+
+
+def test_a_sheet_can_hold_both_currencies(monkeypatch):
+    """One sheet, two ledgers — the tabs split them, the store does not."""
+
+    class FakeSheet:
+        def get_all_records(self):
+            return [
+                {"date": "2026-01-01", "person": "Brother", "ledger": "Bike loan",
+                 "direction": "given", "amount": "50000", "currency": "INR", "note": ""},
+                {"date": "2026-02-01", "person": "Brother", "ledger": "Flight",
+                 "direction": "given", "amount": "600", "currency": "USD", "note": ""},
+            ]
+
+    monkeypatch.setattr(store, "_open_worksheet", lambda _s: FakeSheet())
+    entries = store.load(secrets=CONFIGURED).entries
+    assert {e.currency for e in entries} == {Currency.INR, Currency.USD}
+
+
+def test_totals_refuse_to_mix_currencies():
+    """A combined rupee+dollar figure would need an exchange rate we do not have."""
+    from ledger.compute import totals as compute_totals
+
+    mixed = [
+        Entry(date=date(2026, 1, 1), person="A", ledger="L",
+              direction=Direction.given, amount_minor=100, currency=Currency.INR),
+        Entry(date=date(2026, 1, 2), person="A", ledger="L",
+              direction=Direction.given, amount_minor=100, currency=Currency.USD),
+    ]
+    with pytest.raises(ValueError, match="cannot total across currencies"):
+        compute_totals(mixed)

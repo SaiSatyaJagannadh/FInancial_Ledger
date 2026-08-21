@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from ledger.money import format_compact, format_inr, to_paise, to_rupees
+from ledger.money import Currency, format_compact, format_money, to_major, to_minor
 
 
 @pytest.mark.parametrize(
@@ -19,25 +19,25 @@ from ledger.money import format_compact, format_inr, to_paise, to_rupees
         (500, 50000),
     ],
 )
-def test_to_paise(raw, expected):
-    assert to_paise(raw) == expected
+def test_to_minor(raw, expected):
+    assert to_minor(raw) == expected
 
 
 @pytest.mark.parametrize("bad", ["", "   ", "abc", "₹", "-", "."])
-def test_to_paise_rejects_garbage(bad):
+def test_to_minor_rejects_garbage(bad):
     with pytest.raises(ValueError):
-        to_paise(bad)
+        to_minor(bad)
 
 
-def test_to_paise_rejects_bool():
+def test_to_minor_rejects_bool():
     # bool is an int subclass; True would quietly become ₹0.01.
     with pytest.raises(ValueError):
-        to_paise(True)
+        to_minor(True)
 
 
 def test_round_trip_is_lossless():
     for paise in (-123456, -1, 0, 1, 99, 100, 67_680_000):
-        assert to_paise(to_rupees(paise)) == paise
+        assert to_minor(to_major(paise)) == paise
 
 
 @pytest.mark.parametrize(
@@ -55,12 +55,12 @@ def test_round_trip_is_lossless():
         (1_000_000_00, "₹10,00,000.00"),      # 10 lakh
     ],
 )
-def test_format_inr(paise, text):
-    assert format_inr(paise) == text
+def test_format_money(paise, text):
+    assert format_money(paise) == text
 
 
 def test_format_inr_crore_grouping():
-    assert format_inr(to_paise(12_345_678)) == "₹1,23,45,678.00"
+    assert format_money(to_minor(12_345_678)) == "₹1,23,45,678.00"
 
 
 @pytest.mark.parametrize(

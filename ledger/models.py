@@ -6,10 +6,11 @@ import enum
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
-from ledger.money import to_paise
+from ledger.money import Currency, parse_currency, to_minor
 
 #: Sheet header, in order. Changing this changes the sheet contract.
-COLUMNS = ["date", "person", "ledger", "direction", "amount", "note"]
+#: `currency` was added later; a sheet without it is read as rupees.
+COLUMNS = ["date", "person", "ledger", "direction", "amount", "currency", "note"]
 
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%d %b %Y", "%d %B %Y")
 
@@ -55,7 +56,8 @@ class Entry:
     person: str
     ledger: str
     direction: Direction
-    amount_paise: int
+    amount_minor: int
+    currency: Currency = Currency.INR
     note: str = ""
     #: 1-based row in the sheet, when the entry came from one.
     row: int | None = field(default=None, compare=False)
@@ -65,19 +67,24 @@ class Entry:
             raise EntryError("person is required")
         if not self.ledger.strip():
             raise EntryError("ledger is required")
-        if self.amount_paise <= 0:
+        if self.amount_minor <= 0:
             # Direction carries the sign; a negative amount would double-negate.
             raise EntryError("amount must be positive — use direction for the sign")
 
     @property
-    def signed_paise(self) -> int:
+    def signed_minor(self) -> int:
         """Contribution to net owed: given adds, received subtracts."""
-        return self.amount_paise if self.direction is Direction.given else -self.amount_paise
+        return self.amount_minor if self.direction is Direction.given else -self.amount_minor
 
     @property
-    def key(self) -> tuple[str, str]:
-        """Identifies the ledger this entry belongs to."""
-        return (self.person, self.ledger)
+    def key(self) -> tuple[str, str, Currency]:
+        """Identifies the ledger this entry belongs to.
+
+        Currency is part of the identity: lending someone ₹50,000 and $600 is
+        two arrangements, and netting one against the other would need an
+        exchange rate this app deliberately does not invent.
+        """
+        return (self.person, self.ledger, self.currency)
 
     @classmethod
     def from_row(cls, row: dict, row_number: int | None = None) -> Entry:
@@ -86,7 +93,11 @@ class Entry:
         if missing:
             raise EntryError(f"missing column(s): {', '.join(missing)}")
         try:
-            amount = to_paise(row["amount"])
+            amount = to_minor(row["amount"])
+        except ValueError as exc:
+            raise EntryError(str(exc)) from exc
+        try:
+            currency = parse_currency(row.get("currency"))
         except ValueError as exc:
             raise EntryError(str(exc)) from exc
         return cls(
@@ -94,7 +105,8 @@ class Entry:
             person=str(row["person"]).strip(),
             ledger=str(row["ledger"]).strip(),
             direction=parse_direction(row["direction"]),
-            amount_paise=amount,
+            amount_minor=amount,
+            currency=currency,
             note=str(row.get("note") or "").strip(),
             row=row_number,
         )
@@ -105,12 +117,13 @@ class Entry:
         The amount is rendered by integer divmod, not `paise / 100`: this is the
         persistence boundary, and it is the one place a float must not appear.
         """
-        whole, frac = divmod(self.amount_paise, 100)
+        whole, frac = divmod(self.amount_minor, 100)
         return [
             self.date.isoformat(),
             self.person,
             self.ledger,
             self.direction.value,
             f"{whole}.{frac:02d}",
+            self.currency.value,
             self.note,
         ]

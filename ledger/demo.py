@@ -12,16 +12,21 @@ import random
 from datetime import date, timedelta
 
 from ledger.models import Direction, Entry
-from ledger.money import to_paise
+from ledger.money import Currency, to_minor
 
 SEED = 20260821
 
-#: (person, ledger, rupees given, rupees received, n given, n received, last activity)
+#: (person, ledger, currency, given, received, n given, n received, last activity)
+#: The rupee rows are pinned to the reference dashboard. The dollar rows model
+#: the other half of the same life: earning in USD, lending in INR back home.
 PLAN = [
-    ("Father", "House repair", 241_800, 52_900, 6, 3, date(2026, 1, 24)),
-    ("Brother", "Bike loan", 168_000, 84_600, 5, 3, date(2026, 7, 24)),
-    ("Brother", "Rent float", 101_800, 47_000, 3, 2, date(2026, 5, 12)),
-    ("Ravi (friend)", "Business help", 165_200, 119_500, 6, 4, date(2026, 7, 26)),
+    ("Father", "House repair", Currency.INR, 241_800, 52_900, 6, 3, date(2026, 1, 24)),
+    ("Brother", "Bike loan", Currency.INR, 168_000, 84_600, 5, 3, date(2026, 7, 24)),
+    ("Brother", "Rent float", Currency.INR, 101_800, 47_000, 3, 2, date(2026, 5, 12)),
+    ("Ravi (friend)", "Business help", Currency.INR, 165_200, 119_500, 6, 4, date(2026, 7, 26)),
+    ("Brother", "Flight ticket", Currency.USD, 1_450, 400, 2, 1, date(2026, 6, 18)),
+    ("Sam (roommate)", "Deposit share", Currency.USD, 2_300, 1_150, 4, 2, date(2026, 7, 2)),
+    ("Priya (cousin)", "Tuition", Currency.USD, 3_600, 900, 3, 2, date(2026, 5, 30)),
 ]
 
 NOTES_GIVEN = ["transfer", "cash", "UPI", "cheque", "NEFT", "handed over"]
@@ -66,7 +71,7 @@ def build_demo_entries() -> list[Entry]:
     rng = random.Random(SEED)
     entries: list[Entry] = []
 
-    for person, name, given, received, n_given, n_received, last in PLAN:
+    for person, name, currency, given, received, n_given, n_received, last in PLAN:
         given_dates = _dates(n_given, last, rng)
         for amount, when in zip(split_exact(given, n_given, rng), given_dates):
             entries.append(
@@ -75,7 +80,8 @@ def build_demo_entries() -> list[Entry]:
                     person=person,
                     ledger=name,
                     direction=Direction.given,
-                    amount_paise=to_paise(amount),
+                    amount_minor=to_minor(amount),
+                    currency=currency,
                     note=rng.choice(NOTES_GIVEN),
                 )
             )
@@ -94,25 +100,28 @@ def build_demo_entries() -> list[Entry]:
                     person=person,
                     ledger=name,
                     direction=Direction.received,
-                    amount_paise=to_paise(amount),
+                    amount_minor=to_minor(amount),
+                    currency=currency,
                     note=rng.choice(NOTES_RECEIVED),
                 )
             )
 
-    entries.sort(key=lambda e: (e.date, e.person, e.ledger))
+    entries.sort(key=lambda e: (e.date, e.person, e.ledger, e.currency.value))
 
     _assert_reference_totals(entries)
     return entries
 
 
 def _assert_reference_totals(entries: list[Entry]) -> None:
-    from ledger.compute import by_person, totals
+    """The rupee tab must still match the reference dashboard exactly."""
+    from ledger.compute import by_currency, by_person, totals
 
-    t = totals(entries)
+    rupees = by_currency(entries, Currency.INR)
+    t = totals(rupees)
     assert t.records == 32, f"expected 32 records, got {t.records}"
-    assert t.given_paise == to_paise(676_800), t.given_paise
-    assert t.received_paise == to_paise(304_000), t.received_paise
-    assert t.net_paise == to_paise(372_800), t.net_paise
+    assert t.given_minor == to_minor(676_800), t.given_minor
+    assert t.received_minor == to_minor(304_000), t.received_minor
+    assert t.net_minor == to_minor(372_800), t.net_minor
     assert t.people == 3 and t.ledgers == 4 and t.open_ledgers == 4
 
     expected = {
@@ -120,9 +129,9 @@ def _assert_reference_totals(entries: list[Entry]) -> None:
         "Brother": (269_800, 131_600, date(2026, 7, 24), 2),
         "Ravi (friend)": (165_200, 119_500, date(2026, 7, 26), 1),
     }
-    for row in by_person(entries):
+    for row in by_person(rupees):
         given, received, last, ledgers = expected[row.person]
-        assert row.given_paise == to_paise(given), (row.person, row.given_paise)
-        assert row.received_paise == to_paise(received), (row.person, row.received_paise)
+        assert row.given_minor == to_minor(given), (row.person, row.given_minor)
+        assert row.received_minor == to_minor(received), (row.person, row.received_minor)
         assert row.last_activity == last, (row.person, row.last_activity)
         assert row.ledgers == ledgers, (row.person, row.ledgers)

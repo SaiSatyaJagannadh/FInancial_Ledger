@@ -3,7 +3,7 @@
 A ledger for money lent to and repaid by **people you know** — family, friends —
 not a business chart of accounts. It answers one question: *who owes me what.*
 
-Streamlit UI, Google Sheet as the store, amounts in ₹ (INR).
+Streamlit UI, Google Sheet as the store, in **₹ and $ side by side** — one tab each.
 
 ## 1. The domain
 
@@ -20,13 +20,20 @@ An **entry** is a single movement:
 | person | str | who it was with |
 | ledger | str | which arrangement, e.g. `Bike loan` |
 | direction | enum | `given` (money out to them) / `received` (money back) |
-| amount | ₹ | always positive; `direction` carries the sign |
+| amount | int | always positive; `direction` carries the sign |
+| currency | enum | `INR` / `USD`; blank on an old sheet means INR |
 | note | str? | free text |
 
 **Net owed = given − received.** Positive means they owe you. Negative means you
 owe them. A ledger is **open** while its net is non-zero.
 
-Money is stored as **integer paise**. No float ever touches a total: `0.1 + 0.2`
+**Currencies are never combined.** Money lent in rupees and money lent in dollars
+are different quantities; adding them needs an exchange rate that moves daily, so
+the app keeps two ledgers instead of inventing one. Currency is part of a
+ledger's identity — the same person and the same ledger name in two currencies is
+two arrangements. `totals()` raises rather than summing a mixed list.
+
+Money is stored as **integer minor units** (paise, cents). No float ever touches a total: `0.1 + 0.2`
 is not `0.3` in binary floating point, and a ledger that drifts is worthless.
 
 ## 2. Store
@@ -43,6 +50,8 @@ account's email. Reads are cached briefly so a rerun does not re-fetch.
 ## 3. Screens
 
 ### Dashboard (`app.py`)
+- **One tab per currency**, each a complete dashboard over only that currency,
+  with its own filters. Both tabs always show, so an unused one is discoverable.
 - **Filters:** period (last 6/12/24 months, all time), people (multi-select).
 - **Headline:** total given, total received, net outstanding, people count, and
   how many ledgers are still open.
@@ -52,7 +61,8 @@ account's email. Reads are cached briefly so a rerun does not re-fetch.
   underlying numbers available as a table.
 
 ### Add Entry (`pages/`)
-A form: date, person, ledger, direction, amount, note. Person and ledger offer
+A form: currency, date, person, ledger, direction, amount, note. Picking a
+currency narrows the person and ledger suggestions to that currency's. Person and ledger offer
 existing values but accept new ones, so a new arrangement needs no setup step.
 Appends one row and invalidates the cache.
 
@@ -78,7 +88,9 @@ tests/
 
 ## 6. Acceptance
 
-- [ ] Totals are exact in paise; no float appears in an arithmetic path.
+- [ ] Totals are exact in minor units; no float appears in an arithmetic path.
+- [ ] Rupee and dollar figures never combine; a mixed total raises instead.
+- [ ] A sheet with no currency column still reads as rupees.
 - [ ] Net owed per person = given − received, and the people rows sum to the
       headline totals.
 - [ ] Open-ledger count counts ledgers whose net is non-zero.

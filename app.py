@@ -1,4 +1,4 @@
-"""Personal Ledger — who owes me what."""
+"""Personal Ledger — who owes me what, in each currency separately."""
 
 from __future__ import annotations
 
@@ -8,9 +8,17 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from ledger import store
-from ledger.compute import ALL_TIME, PERIODS, by_person, filter_entries, monthly_given, totals
-from ledger.money import format_inr
+from ledger.compute import (
+    PERIODS,
+    by_currency,
+    by_person,
+    filter_entries,
+    ledger_breakdown,
+    monthly_given,
+    totals,
+)
+from ledger.models import Entry
+from ledger.money import Currency, format_money
 from ledger.ui import demo_banner, load_ledger, page_config
 
 page_config("Personal Ledger")
@@ -21,151 +29,166 @@ demo_banner(result)
 st.title("Personal Ledger")
 st.caption(f"As of {date.today():%d %b %Y}")
 
-# --------------------------------------------------------------------- filters
-everyone = sorted({e.person for e in result.entries})
 
-left, middle, right = st.columns([2, 3, 1])
-with left:
-    period = st.selectbox("Period", list(PERIODS), index=list(PERIODS).index("Last 24 months"))
-with middle:
-    people = st.multiselect("People", everyone, default=everyone)
-with right:
-    # Placeholder so the metric lines up with the inputs beside it.
-    st.write("")
+def render(entries: list[Entry], currency: Currency, key: str) -> None:
+    """One currency's dashboard. Nothing here ever sees another currency."""
+    money = lambda minor, decimals=True: format_money(minor, currency, decimals)  # noqa: E731
 
-entries = filter_entries(result.entries, period=period, people=people)
-summary = totals(entries)
-
-with right:
-    st.metric("Records", summary.records)
-
-st.divider()
-
-if not entries:
-    st.info("No entries match these filters. Widen the period or add someone back.")
-    st.stop()
-
-# -------------------------------------------------------------------- headline
-one, two, three, four = st.columns(4)
-one.metric("Total given", format_inr(summary.given_paise))
-two.metric("Total received", format_inr(summary.received_paise))
-three.metric(
-    "Net outstanding",
-    format_inr(summary.net_paise),
-    delta=f"{summary.open_ledgers} open ledger" + ("s" if summary.open_ledgers != 1 else ""),
-    delta_color="off",
-)
-four.metric("People", summary.people)
-
-st.divider()
-
-# ------------------------------------------------------------------- the tables
-table_col, chart_col = st.columns([1.35, 1], gap="large")
-
-with table_col:
-    st.subheader("Who owes me what")
-    rows = by_person(entries)
-    st.table(
-        pd.DataFrame(
-            [
-                {
-                    "Person": r.person,
-                    "Given": format_inr(r.given_paise, decimals=False),
-                    "Received": format_inr(r.received_paise, decimals=False),
-                    "Net owed": format_inr(r.net_paise, decimals=False),
-                    "Last activity": f"{r.last_activity:%d %b %y}",
-                    "Ledgers": r.ledgers,
-                }
-                for r in rows
-            ]
-        ).set_index("Person")
-    )
-    st.caption("Positive net = they owe you. Negative = you owe them.")
-
-    owed_to_you = [r for r in rows if r.net_paise < 0]
-    if owed_to_you:
-        names = ", ".join(r.person for r in owed_to_you)
-        st.caption(f"You owe: {names}.")
-
-with chart_col:
-    st.subheader("Money given per month")
-    series = monthly_given(entries)
-    if not series:
-        st.info("No money went out in this period.")
-    else:
-        frame = pd.DataFrame(series)
-        frame["Month"] = pd.to_datetime(frame["month"] + "-01")
-        frame["Amount"] = frame["amount_paise"] / 100
-        frame = frame.rename(columns={"person": "Person"})
-
-        chart = (
-            alt.Chart(frame)
-            .mark_bar()
-            .encode(
-                x=alt.X("yearmonth(Month):T", title=None, axis=alt.Axis(format="%b %y")),
-                y=alt.Y("Amount:Q", title=None, axis=alt.Axis(format="~s")),
-                color=alt.Color("Person:N", title=None, legend=alt.Legend(orient="top")),
-                xOffset=alt.XOffset("Person:N"),
-                tooltip=[
-                    alt.Tooltip("yearmonth(Month):T", title="Month", format="%b %Y"),
-                    "Person:N",
-                    alt.Tooltip("Amount:Q", title="Given", format=",.2f"),
-                ],
-            )
-            .properties(height=380)
+    if not entries:
+        st.info(
+            f"No {currency.label.lower()} entries yet. Add one from **Add Entry** "
+            f"and pick {currency.value} as the currency."
         )
-        st.altair_chart(chart, width="stretch")
+        return
 
-        with st.expander("View as table"):
-            pivot = (
-                frame.pivot_table(
-                    index="month", columns="Person", values="amount_paise",
-                    aggfunc="sum", fill_value=0,
+    everyone = sorted({e.person for e in entries})
+
+    left, middle, right = st.columns([2, 3, 1])
+    with left:
+        period = st.selectbox(
+            "Period", list(PERIODS), index=list(PERIODS).index("Last 24 months"), key=f"{key}_period"
+        )
+    with middle:
+        people = st.multiselect("People", everyone, default=everyone, key=f"{key}_people")
+
+    shown = filter_entries(entries, period=period, people=people, currency=currency)
+    summary = totals(shown, currency)
+
+    with right:
+        st.metric("Records", summary.records)
+
+    st.divider()
+
+    if not shown:
+        st.info("No entries match these filters. Widen the period or add someone back.")
+        return
+
+    one, two, three, four = st.columns(4)
+    one.metric("Total given", money(summary.given_minor))
+    two.metric("Total received", money(summary.received_minor))
+    three.metric(
+        "Net outstanding",
+        money(summary.net_minor),
+        delta=f"{summary.open_ledgers} open ledger" + ("s" if summary.open_ledgers != 1 else ""),
+        delta_color="off",
+    )
+    four.metric("People", summary.people)
+
+    st.divider()
+
+    table_col, chart_col = st.columns([1.35, 1], gap="large")
+
+    with table_col:
+        st.subheader("Who owes me what")
+        rows = by_person(shown, currency)
+        st.table(
+            pd.DataFrame(
+                [
+                    {
+                        "Person": r.person,
+                        "Given": money(r.given_minor, False),
+                        "Received": money(r.received_minor, False),
+                        "Net owed": money(r.net_minor, False),
+                        "Last activity": f"{r.last_activity:%d %b %y}",
+                        "Ledgers": r.ledgers,
+                    }
+                    for r in rows
+                ]
+            ).set_index("Person")
+        )
+        st.caption("Positive net = they owe you. Negative = you owe them.")
+
+        you_owe = [r for r in rows if r.net_minor < 0]
+        if you_owe:
+            st.caption("You owe: " + ", ".join(r.person for r in you_owe) + ".")
+
+    with chart_col:
+        st.subheader("Money given per month")
+        series = monthly_given(shown)
+        if not series:
+            st.info("No money went out in this period.")
+        else:
+            frame = pd.DataFrame(series)
+            frame["Month"] = pd.to_datetime(frame["month"] + "-01")
+            frame["Amount"] = frame["amount_minor"] / 100
+            frame = frame.rename(columns={"person": "Person"})
+
+            chart = (
+                alt.Chart(frame)
+                .mark_bar()
+                .encode(
+                    x=alt.X("yearmonth(Month):T", title=None, axis=alt.Axis(format="%b %y")),
+                    y=alt.Y(
+                        "Amount:Q",
+                        title=None,
+                        axis=alt.Axis(format="~s", labelExpr=f"'{currency.symbol}' + datum.label"),
+                    ),
+                    color=alt.Color("Person:N", title=None, legend=alt.Legend(orient="top")),
+                    xOffset=alt.XOffset("Person:N"),
+                    tooltip=[
+                        alt.Tooltip("yearmonth(Month):T", title="Month", format="%b %Y"),
+                        "Person:N",
+                        alt.Tooltip("Amount:Q", title=f"Given ({currency.value})", format=",.2f"),
+                    ],
                 )
-                .map(format_inr)
+                .properties(height=380)
             )
-            st.dataframe(pivot, width="stretch")
+            st.altair_chart(chart, width="stretch")
 
-# ------------------------------------------------------------------ the detail
-st.divider()
-with st.expander("Every ledger, separately"):
-    from ledger.compute import ledger_breakdown
+            with st.expander("View as table"):
+                st.dataframe(
+                    frame.pivot_table(
+                        index="month", columns="Person", values="amount_minor",
+                        aggfunc="sum", fill_value=0,
+                    ).map(lambda v: money(int(v))),
+                    width="stretch",
+                )
 
-    detail = ledger_breakdown(entries)
-    st.dataframe(
-        pd.DataFrame(
-            [
-                {
-                    "Person": r["person"],
-                    "Ledger": r["ledger"],
-                    "Given": format_inr(r["given_paise"], decimals=False),
-                    "Received": format_inr(r["received_paise"], decimals=False),
-                    "Net owed": format_inr(r["net_paise"], decimals=False),
-                    "Last activity": f"{r['last_activity']:%d %b %y}",
-                    "Status": "open" if r["open"] else "settled",
-                }
-                for r in detail
-            ]
-        ),
-        hide_index=True,
-        width="stretch",
-    )
+    st.divider()
 
-with st.expander("All entries"):
-    st.dataframe(
-        pd.DataFrame(
-            [
-                {
-                    "Date": f"{e.date:%d %b %y}",
-                    "Person": e.person,
-                    "Ledger": e.ledger,
-                    "Direction": e.direction.value,
-                    "Amount": format_inr(e.amount_paise, decimals=False),
-                    "Note": e.note,
-                }
-                for e in sorted(entries, key=lambda x: x.date, reverse=True)
-            ]
-        ),
-        hide_index=True,
-        width="stretch",
-    )
+    with st.expander("Every ledger, separately"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Person": r["person"],
+                        "Ledger": r["ledger"],
+                        "Given": money(r["given_minor"], False),
+                        "Received": money(r["received_minor"], False),
+                        "Net owed": money(r["net_minor"], False),
+                        "Last activity": f"{r['last_activity']:%d %b %y}",
+                        "Status": "open" if r["open"] else "settled",
+                    }
+                    for r in ledger_breakdown(shown)
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+
+    with st.expander("All entries"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Date": f"{e.date:%d %b %y}",
+                        "Person": e.person,
+                        "Ledger": e.ledger,
+                        "Direction": e.direction.value,
+                        "Amount": money(e.amount_minor, False),
+                        "Note": e.note,
+                    }
+                    for e in sorted(shown, key=lambda x: x.date, reverse=True)
+                ]
+            ),
+            hide_index=True,
+            width="stretch",
+        )
+
+
+# Both currencies always get a tab, so the one you have not used yet is still
+# discoverable. Totals are never combined across them.
+tabs = st.tabs([f"{c.flag}  {c.label}" for c in Currency])
+for tab, currency in zip(tabs, Currency):
+    with tab:
+        render(by_currency(result.entries, currency), currency, key=currency.value)
