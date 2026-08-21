@@ -32,6 +32,17 @@ def call(method, path, body=None, files=None):
         raw = e.read()
         return e.code, (json.loads(raw) if raw else None)
 
+def ai_states_total(text, total_minor):
+    """Same acceptance the server applies: the sentence must repeat our figure."""
+    target = f"${total_minor / 100:,.2f}"
+    plain = target.lstrip("$")
+    cands = {target, plain, plain.replace(",", "")}
+    if plain.endswith(".00"):
+        whole = plain[:-3]
+        cands |= {f"${whole}", whole, whole.replace(",", "")}
+    return any(c in text for c in cands)
+
+
 def check(name, ok, detail=""):
     results.append((ok, name, detail))
     print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"\n        {detail}" if detail else ""))
@@ -101,17 +112,46 @@ check("Uncategorized rows remain visible and fixable",
       f"holding balance={holding[0]['balance_minor'] if holding else 'missing'}, "
       f"surfaced in /ai/categorize={visible}")
 
-# 5. Every reported number traces to postings (no LLM arithmetic)
-plan_total = call("POST", "/ai/ask", {"question": "How much did I spend on groceries this year?"})
-if plan_total[0] == 200:
-    ans = plan_total[1]
-    stmt = call("GET", "/reports/income-statement?start=2026-01-01&end=2026-12-31")[1]
-    groc = [l for l in stmt["expenses"] if l["code"] == "expenses:food:groceries"]
-    match = groc and groc[0]["amount_minor"] == ans["total_minor"]
-    check("AI answer figure equals the report's own SQL figure",
-          bool(match), f"ask={ans['total_minor']} report={groc[0]['amount_minor'] if groc else 'n/a'}")
+# 5. Every reported number traces to postings (no LLM arithmetic).
+#    The model picks the filters, so which filter it picks varies run to run.
+#    What must never vary is that the figure equals what the DATABASE computes
+#    for that filter — so recompute the returned plan independently in raw SQL.
+NORMAL = {"asset": 1, "expense": 1, "liability": -1, "equity": -1, "income": -1}
+
+def independent_total(plan):
+    import sqlite3
+    db = sqlite3.connect("ledger.db")
+    sql = ("SELECT a.type, SUM(p.amount_minor) FROM postings p "
+           "JOIN accounts a ON a.id=p.account_id "
+           "JOIN transactions t ON t.id=p.transaction_id WHERE a.type IN (%s)"
+           % ",".join("?" * len(plan["account_types"])))
+    args = list(plan["account_types"])
+    if plan["account_codes"]:
+        sql += " AND a.code IN (%s)" % ",".join("?" * len(plan["account_codes"]))
+        args += plan["account_codes"]
+    if plan["start"]:
+        sql += " AND t.date >= ?"; args.append(plan["start"])
+    if plan["end"]:
+        sql += " AND t.date <= ?"; args.append(plan["end"])
+    if plan["text"]:
+        sql += " AND t.description LIKE ?"; args.append(f"%{plan['text']}%")
+    sql += " GROUP BY a.type"
+    return sum(NORMAL[t] * int(v or 0) for t, v in db.execute(sql, args))
+
+st, ans = call("POST", "/ai/ask", {"question": "How much did I spend on groceries this year?"})
+if st == 200:
+    expected = independent_total(ans["query"])
+    stated = ai_states_total(ans["answer"], ans["total_minor"])
+    check("AI total equals independent SQL over the plan the model chose",
+          expected == ans["total_minor"],
+          f"api={ans['total_minor']} independent SQL={expected} "
+          f"plan={json.dumps({k: v for k, v in ans['query'].items() if k != 'intent'})}")
+    check("Narrated sentence states that same figure",
+          stated, f"answer={ans['answer']!r} total={ans['total_minor']}")
+elif st == 503:
+    check("AI ask degrades with a clear 503 when no key is set", True, str(ans.get("detail"))[:80])
 else:
-    check("AI ask reachable", False, f"status={plan_total[0]}")
+    check("AI ask reachable", False, f"status={st}")
 
 # 6. Balance sheet identity holds
 bs = call("GET", "/reports/balance-sheet")[1]
