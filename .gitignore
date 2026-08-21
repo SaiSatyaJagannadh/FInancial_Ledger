@@ -435,3 +435,5 @@ backend/*.db-wal
 backend/*.db-shm
 .env
 backend/*.egg-info/
+frontend/node_modules/
+frontend/dist/
