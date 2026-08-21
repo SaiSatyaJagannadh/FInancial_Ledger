@@ -15,7 +15,12 @@ class Settings(BaseSettings):
     # rather than breaking the app. See app/ai.py.
     nvidia_api_key: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
-    nvidia_model: str = "meta/llama-3.3-70b-instruct"
+    # Verified responsive on this endpoint. Larger models are listed by
+    # /v1/models but can stall indefinitely, which is why every call below has
+    # a timeout rather than trusting the endpoint to answer.
+    nvidia_model: str = "meta/llama-3.1-8b-instruct"
+    nvidia_timeout_seconds: float = 45.0
+    nvidia_max_retries: int = 1
 
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 

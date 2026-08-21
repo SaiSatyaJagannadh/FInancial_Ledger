@@ -47,7 +47,14 @@ def client():
         )
     from openai import OpenAI  # imported lazily so the app boots without the SDK configured
 
-    return OpenAI(api_key=settings.nvidia_api_key, base_url=settings.nvidia_base_url)
+    return OpenAI(
+        api_key=settings.nvidia_api_key,
+        base_url=settings.nvidia_base_url,
+        # A model that never answers must not hold an HTTP worker open; the
+        # callers all have a local fallback to drop to.
+        timeout=settings.nvidia_timeout_seconds,
+        max_retries=settings.nvidia_max_retries,
+    )
 
 
 def _complete(messages: list[dict], *, temperature: float = 0.1, max_tokens: int = 1024) -> str:
