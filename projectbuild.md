@@ -1,131 +1,89 @@
-# Financial Ledger — Project Build Spec
+# Personal Ledger — Project Build Spec
 
-A double-entry personal/small-business ledger with an AI layer (NVIDIA NIM) for
-transaction categorization and natural-language reporting.
+A ledger for money lent to and repaid by **people you know** — family, friends —
+not a business chart of accounts. It answers one question: *who owes me what.*
 
-## 1. Why double entry
+Streamlit UI, Google Sheet as the store, amounts in ₹ (INR).
 
-Single-table "transactions with a category" ledgers cannot answer "where did the
-money go" without guessing. Double entry makes every movement balance to zero, so
-the books are self-checking: if the invariant holds, no money was invented or lost.
+## 1. The domain
 
-## 2. Domain model
+You give money to a person; they give some back over time. A **ledger** is one
+running arrangement with one person (a loan, a shared expense, a standing float).
+A person can have several — a brother with a bike loan and a rent float is two
+ledgers, tracked separately, summarised together.
 
-**Money is stored as signed integer minor units** (cents). No floats anywhere in
-the persistence or arithmetic path. Display formatting is the only place decimals
-appear.
+An **entry** is a single movement:
 
-### Account
 | field | type | notes |
 |---|---|---|
-| id | int PK | |
-| code | str unique | e.g. `expenses:food:groceries` |
-| name | str | display name |
-| type | enum | `asset` `liability` `equity` `income` `expense` |
-| currency | str(3) | ISO 4217, default `USD` |
-| parent_id | int? | tree; enables rollups |
-| archived | bool | hidden from pickers, history preserved |
+| date | date | when the money moved |
+| person | str | who it was with |
+| ledger | str | which arrangement, e.g. `Bike loan` |
+| direction | enum | `given` (money out to them) / `received` (money back) |
+| amount | ₹ | always positive; `direction` carries the sign |
+| note | str? | free text |
 
-Normal balance: `asset`/`expense` are debit-normal (positive = increase).
-`liability`/`equity`/`income` are credit-normal (negative = increase).
+**Net owed = given − received.** Positive means they owe you. Negative means you
+owe them. A ledger is **open** while its net is non-zero.
 
-### Transaction (journal entry)
-| field | type | notes |
-|---|---|---|
-| id | int PK | |
-| date | date | posting date |
-| description | str | payee / merchant |
-| memo | str? | |
-| external_id | str? unique | dedupe key for imports |
-| source | str | `manual` `csv` `rule` |
+Money is stored as **integer paise**. No float ever touches a total: `0.1 + 0.2`
+is not `0.3` in binary floating point, and a ledger that drifts is worthless.
 
-### Posting (split)
-| field | type | notes |
-|---|---|---|
-| id | int PK | |
-| transaction_id | int FK | cascade delete |
-| account_id | int FK | restrict delete |
-| amount_minor | int | signed; debit +, credit − |
-| currency | str(3) | |
+## 2. Store
 
-### Invariants (enforced in the service layer, tested)
-1. A transaction has **>= 2 postings**.
-2. `sum(amount_minor) == 0` **per currency** within a transaction.
-3. Postings are immutable once written — edits replace the whole transaction.
-4. Accounts with postings cannot be deleted, only archived.
+A single Google Sheet, one row per entry, columns exactly as above.
 
-## 3. Features
+**Demo mode is the default.** With no credentials in `.streamlit/secrets.toml`
+the app loads deterministic sample data and says so in a banner. This is not a
+degraded state — it is how you evaluate the app before wiring your own sheet up.
 
-### Core
-- CRUD accounts (tree), CRUD transactions (atomic, balanced).
-- Account balances: point-in-time and as-of-date, with subtree rollup.
-- Trial balance (must sum to zero — health check endpoint).
+Credentials are a Google service account; the sheet is shared with that
+account's email. Reads are cached briefly so a rerun does not re-fetch.
 
-### Import
-- CSV import with a column mapping (`date`, `description`, `amount`, or separate
-  `debit`/`credit` columns).
-- Dedupe on `external_id` (hash of date+description+amount when the bank gives none).
-- Imports land as **two-posting transactions**: bank account + a holding account
-  `expenses:uncategorized` / `income:uncategorized`, then get categorized.
+## 3. Screens
 
-### Rules engine (deterministic, runs before AI)
-- Ordered rules: `match_type` (`contains` | `regex`), `pattern`, `account_id`.
-- Applied on import and re-runnable over uncategorized transactions.
+### Dashboard (`app.py`)
+- **Filters:** period (last 6/12/24 months, all time), people (multi-select).
+- **Headline:** total given, total received, net outstanding, people count, and
+  how many ledgers are still open.
+- **Who owes me what:** one row per person — given, received, net owed, last
+  activity, ledger count. Sorted by net owed, largest first.
+- **Money given per month:** grouped bars per person per month, with the
+  underlying numbers available as a table.
 
-### AI layer (NVIDIA NIM, OpenAI-compatible)
-- `POST /ai/categorize` — batch-classifies uncategorized transactions into existing
-  expense/income accounts. Constrained to the real account list; returns confidence.
-- `POST /ai/ask` — natural-language question → structured query over the ledger →
-  numeric answer with the rows it used (no hallucinated numbers: the LLM picks
-  filters, **the database computes the totals**).
-- **Degradation:** with no `NVIDIA_API_KEY`, `/ai/categorize` falls back to the rules
-  engine + a token-overlap heuristic, and `/ai/ask` returns a 503 with a clear
-  message. The app is fully usable without the key.
-
-### Reports
-- Balance sheet (assets = liabilities + equity, as of a date).
-- Income statement (income − expenses over a range).
-- Monthly spend by category, with subtree rollup.
-- Net worth trend.
+### Add Entry (`pages/`)
+A form: date, person, ledger, direction, amount, note. Person and ledger offer
+existing values but accept new ones, so a new arrangement needs no setup step.
+Appends one row and invalidates the cache.
 
 ## 4. Stack
 
-- **Backend:** Python 3.11, FastAPI, SQLAlchemy 2.x, SQLite (WAL). Pydantic v2 schemas.
-- **AI:** `openai` SDK pointed at `https://integrate.api.nvidia.com/v1`.
-- **Frontend:** Vite + React 18 + TypeScript + Tailwind, TanStack Query, Recharts.
-- **Tests:** pytest (backend, incl. invariant + API tests), vitest (frontend units),
-  a Chrome-driven E2E smoke pass over the running app.
-- **CI:** GitHub Actions running both suites.
+Python 3.11, Streamlit, gspread + google-auth, pandas, Altair.
+pytest for the arithmetic and filtering. A Chrome pass over the running app.
+GitHub Actions runs the suite.
 
 ## 5. Layout
 
 ```
-backend/
-  app/
-    main.py          FastAPI app + CORS + router mounts
-    db.py            engine, session, init
-    models.py        SQLAlchemy models
-    schemas.py       Pydantic DTOs
-    ledger.py        double-entry service — the invariants live here
-    reports.py       balance sheet / income statement / trends
-    rules.py         deterministic categorization
-    ai.py            NVIDIA NIM client + fallbacks
-    importer.py      CSV parsing + dedupe
-    routers/         accounts, transactions, imports, reports, ai
-  tests/
-frontend/
-  src/
-    api.ts, types.ts
-    pages/  Dashboard, Accounts, Transactions, Import, Ask, Reports
-    components/
+app.py                  dashboard
+pages/1_Add_Entry.py    entry form
+ledger/
+  money.py              paise <-> ₹, INR formatting
+  models.py             Entry, validation, direction enum
+  compute.py            filtering and every aggregate the UI shows
+  store.py              Google Sheets read/append + demo fallback
+  demo.py               deterministic sample data
+tests/
 ```
 
 ## 6. Acceptance
 
-- [ ] Unbalanced transaction is rejected with a 422 naming the imbalance.
-- [ ] Trial balance sums to zero after any sequence of API operations.
-- [ ] CSV import of a file twice creates no duplicate transactions.
-- [ ] Rules categorize on import; uncategorized remain visible and fixable.
-- [ ] AI categorize works with a key, degrades without one; no crash either way.
-- [ ] Every reported number traces to postings — no LLM-computed arithmetic.
-- [ ] Backend and frontend suites green; Chrome smoke pass over all pages.
+- [ ] Totals are exact in paise; no float appears in an arithmetic path.
+- [ ] Net owed per person = given − received, and the people rows sum to the
+      headline totals.
+- [ ] Open-ledger count counts ledgers whose net is non-zero.
+- [ ] Period and people filters change every figure on the page consistently.
+- [ ] Demo mode runs with no credentials and says it is demo mode.
+- [ ] Adding an entry appends one row and the dashboard reflects it.
+- [ ] A person with more money received than given shows a negative net.
+- [ ] Test suite green; Chrome pass over both screens.
