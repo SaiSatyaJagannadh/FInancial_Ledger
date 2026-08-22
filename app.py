@@ -36,7 +36,7 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
 
     if not entries:
         st.info(
-            f"No {currency.label.lower()} entries yet. Add one from **Add Entry** "
+            f"No {currency.label} entries yet. Add one from **Add Entry** "
             f"and pick {currency.value} as the currency."
         )
         return
