@@ -19,7 +19,7 @@ from ledger.compute import (
     totals,
 )
 from ledger.models import Entry
-from ledger.money import Currency, format_money
+from ledger.money import Currency, compact, format_money
 from ledger.ui import demo_banner, entry_ledger, load_ledger, styles
 
 styles()
@@ -73,16 +73,30 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
         )
         return
 
+    def headline(amount: int) -> str:
+        """Lakhs when the figure is long, because a metric that reads
+        "₹60,28,00…" tells you nothing. The exact number goes underneath."""
+        short = compact(amount, currency)
+        return f"{currency.symbol}{short}" if short else money(amount)
+
     one, two, three, four = st.columns(4)
-    one.metric("Total given", money(summary.given_minor))
-    two.metric("Total received", money(summary.received_minor))
+    one.metric("Total given", headline(summary.given_minor))
+    two.metric("Total received", headline(summary.received_minor))
     three.metric(
         "Net outstanding",
-        money(summary.net_minor),
+        headline(summary.net_minor),
         delta=f"{summary.open_ledgers} open ledger" + ("s" if summary.open_ledgers != 1 else ""),
         delta_color="off",
     )
     four.metric("People", summary.people)
+
+    for slot, amount in (
+        (one, summary.given_minor),
+        (two, summary.received_minor),
+        (three, summary.net_minor),
+    ):
+        if compact(amount, currency):
+            slot.caption(money(amount))
 
     st.divider()
 
@@ -91,22 +105,32 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
     with table_col:
         st.subheader("Who owes me what")
         rows = by_person(shown, currency)
-        st.table(
-            pd.DataFrame(
-                [
-                    {
-                        "Person": r.person,
-                        "Given": money(r.given_minor, False),
-                        "Received": money(r.received_minor, False),
-                        "Net owed": money(r.net_minor, False),
-                        "Last activity": f"{r.last_activity:%d %b %y}",
-                        "Ledgers": r.ledgers,
-                    }
-                    for r in rows
-                ]
-            ).set_index("Person")
+
+        st.dataframe(
+            pd.DataFrame([
+                {
+                    "Person": r.person,
+                    "Given": r.given_minor / 100,
+                    "Received": r.received_minor / 100,
+                    "Net owed": r.net_minor / 100,
+                    "In short": compact(r.net_minor, currency) or "—",
+                    "Entries": sum(1 for e in shown if e.person == r.person),
+                    "Last activity": r.last_activity,
+                }
+                for r in rows
+            ]),
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Given": st.column_config.NumberColumn(format="%.2f"),
+                "Received": st.column_config.NumberColumn(format="%.2f"),
+                "Net owed": st.column_config.NumberColumn(
+                    format="%.2f", help="Positive = they owe you. Negative = you owe them."
+                ),
+                "Last activity": st.column_config.DateColumn(format="DD MMM YYYY"),
+            },
         )
-        st.caption("Positive net = they owe you. Negative = you owe them.")
+        st.caption(f"Amounts in {currency.value}. Positive net = they owe you.")
 
         you_owe = [r for r in rows if r.net_minor < 0]
         if you_owe:
@@ -131,7 +155,19 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
                     y=alt.Y(
                         "Amount:Q",
                         title=None,
-                        axis=alt.Axis(format="~s", labelExpr=f"'{currency.symbol}' + datum.label"),
+                        axis=alt.Axis(
+                            labelExpr=(
+                                f"'{currency.symbol}' + "
+                                "(datum.value >= 10000000 "
+                                "? format(datum.value / 10000000, '~r') + ' cr' "
+                                ": datum.value >= 100000 "
+                                "? format(datum.value / 100000, '~r') + ' L' "
+                                ": format(datum.value, '~s'))"
+                            )
+                            if currency.value == "INR"
+                            else alt.Undefined,
+                            format="~s" if currency.value != "INR" else alt.Undefined,
+                        ),
                     ),
                     color=alt.Color("Person:N", title=None, legend=alt.Legend(orient="top")),
                     xOffset=alt.XOffset("Person:N"),
@@ -153,6 +189,22 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
                     ).map(lambda v: money(int(v))),
                     width="stretch",
                 )
+
+    st.divider()
+
+    st.markdown("**Open a person to see every entry**")
+    for r in rows:
+        theirs = sorted(
+            [e for e in shown if e.person == r.person],
+            key=lambda e: (e.date, e.row or 0), reverse=True,
+        )
+        short = compact(r.net_minor, currency)
+        with st.expander(
+            f"{r.person} — {money(r.net_minor)}"
+            + (f" ({short})" if short else "")
+            + f" · {len(theirs)} entr{'y' if len(theirs) == 1 else 'ies'}"
+        ):
+            entry_ledger(theirs, scope=f"{key}_{r.person}")
 
     st.divider()
 

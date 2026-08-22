@@ -9,7 +9,7 @@ import streamlit as st
 
 from ledger import store
 from ledger.models import BY_HAND, Direction, Entry, EntryError
-from ledger.money import Currency, format_money, to_minor
+from ledger.money import Currency, format_money, spoken, to_minor
 from ledger.ui import clear_cache, demo_banner, entry_ledger, load_ledger, styles
 
 NEW = "➕ New…"
@@ -68,6 +68,17 @@ with col_e:
     amount_text = st.text_input(
         f"Amount ({currency.symbol})", placeholder="1500", key=f"amount_{currency.value}"
     )
+    # Read the figure back in lakhs. An extra zero is hard to see in "2500000"
+    # and impossible to miss in "25 lakh".
+    try:
+        _typed = to_minor(amount_text) if amount_text.strip() else 0
+    except ValueError:
+        _typed = 0
+    if _typed > 0:
+        _short = spoken(_typed, currency)
+        st.caption(
+            f"= {format_money(_typed, currency)}" + (f"  ·  **{_short}**" if _short else "")
+        )
 
 note = st.text_input("Note", placeholder="UPI, cash, cheque…")
 
@@ -134,8 +145,12 @@ if st.button("Save entry", type="primary", disabled=not ready):
         st.error(f"Could not save: {type(exc).__name__}: {exc}")
     else:
         clear_cache()
-        st.success(f"Saved {format_money(entry.amount_minor, entry.currency)} for {entry.person}.")
-        st.balloons()
+        short = spoken(entry.amount_minor, entry.currency)
+        st.success(
+            f"Added {format_money(entry.amount_minor, entry.currency)}"
+            + (f" ({short})" if short else "")
+            + f" for {entry.person} on {entry.ledger}."
+        )
 
 st.caption(
     "Amounts are always positive — Direction decides whether it counts as money out "

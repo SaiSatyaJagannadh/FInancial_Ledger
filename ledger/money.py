@@ -139,3 +139,49 @@ def format_compact(minor: int, currency: Currency | str = DEFAULT_CURRENCY) -> s
     if major >= 1_000:
         return f"{sign}{symbol}{major / 1_000:.0f}k"
     return f"{sign}{symbol}{major}"
+
+
+#: Indian numbering: a lakh is 10^5 and a crore is 10^7. "25,00,000" is read as
+#: "25 lakh", never as "2.5 million" — so the rupee scale is the Indian one and
+#: the dollar scale is the western one.
+_INR_SCALE = ((10_000_000, "crore"), (100_000, "lakh"), (1_000, "thousand"))
+_USD_SCALE = ((1_000_000_000, "billion"), (1_000_000, "million"), (1_000, "thousand"))
+
+#: Below this there is nothing to simplify — "₹900" is already the clearest way
+#: to say ₹900.
+COMPACT_FLOOR = {Currency.INR: 100_000, Currency.USD: 10_000}
+
+
+def _trim(value: Decimal) -> str:
+    """Two decimals at most, and no trailing zeroes: 25.00 -> 25, 9.50 -> 9.5."""
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def compact(minor: int, currency: Currency | str = DEFAULT_CURRENCY) -> str:
+    """A short reading of a large amount: 2,50,00,000 paise -> "2.5 lakh".
+
+    Returns "" when the figure is small enough to read as it stands, so callers
+    can drop the hint entirely rather than printing something redundant.
+    """
+    currency = currency if isinstance(currency, Currency) else Currency(currency)
+    units = abs(minor) / MINOR
+    if units < COMPACT_FLOOR[currency]:
+        return ""
+
+    scale = _INR_SCALE if currency is Currency.INR else _USD_SCALE
+    for size, name in scale:
+        if units >= size:
+            amount = _trim(Decimal(str(units)) / Decimal(size))
+            sign = "-" if minor < 0 else ""
+            return f"{sign}{amount} {name}"
+    return ""
+
+
+def spoken(minor: int, currency: Currency | str = DEFAULT_CURRENCY) -> str:
+    """`compact` with the symbol in front, for showing beside an input."""
+    short = compact(minor, currency)
+    if not short:
+        return ""
+    currency = currency if isinstance(currency, Currency) else Currency(currency)
+    return f"{currency.symbol}{short}"
