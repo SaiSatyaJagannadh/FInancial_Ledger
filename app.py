@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from ledger.compute import (
+    ALL_TIME,
     PERIODS,
     by_currency,
     by_person,
@@ -45,8 +46,10 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
 
     left, middle, right = st.columns([2, 3, 1])
     with left:
+        # All time, not a recent window: an unsettled debt from 2020 is still
+        # owed, and a default that hides it reads as "nobody owes you anything".
         period = st.selectbox(
-            "Period", list(PERIODS), index=list(PERIODS).index("Last 24 months"), key=f"{key}_period"
+            "Period", list(PERIODS), index=list(PERIODS).index(ALL_TIME), key=f"{key}_period"
         )
     with middle:
         people = st.multiselect("People", everyone, default=everyone, key=f"{key}_people")
@@ -60,7 +63,14 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
     st.divider()
 
     if not shown:
-        st.info("No entries match these filters. Widen the period or add someone back.")
+        # Say what is being hidden. "No entries" alone reads as "you have none",
+        # which is a lie when a filter is what emptied the view.
+        hidden = len(filter_entries(entries, currency=currency))
+        st.info(
+            f"No entries match these filters — but you have **{hidden}** "
+            f"{currency.label} entr{'y' if hidden == 1 else 'ies'} outside them. "
+            "Widen the period or add someone back."
+        )
         return
 
     one, two, three, four = st.columns(4)
