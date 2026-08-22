@@ -22,19 +22,54 @@ def clear_cache() -> None:
     _cached_load.clear()
 
 
+#: Names people actually paste. Streamlit secrets are hand-edited TOML, so the
+#: key arrives however the person typed it.
+_KEY_NAMES = ("NVIDIA_API_KEY", "nvidia_api_key", "NVIDIA_KEY", "nvapi_key")
+
+
 def api_key() -> str:
     """The NVIDIA key, from Streamlit secrets or the environment.
+
+    Looks inside every section, not just the top level. A TOML section header
+    swallows every key beneath it, so a key pasted at the bottom of the box
+    silently becomes `sheet.NVIDIA_API_KEY` and a top-level lookup misses it.
+    That is a footgun in the file format, not a mistake worth making anyone
+    debug, so we just find it wherever it landed.
 
     Falls back to the environment so the assistant can be exercised locally
     without a secrets.toml, which is how it gets tested.
     """
     import os
 
+    def search(mapping) -> str:
+        for name in _KEY_NAMES:
+            try:
+                value = mapping.get(name)
+            except Exception:
+                value = None
+            if value:
+                return str(value)
+        # One level down: [sheet], [drive], [gcp_service_account], …
+        try:
+            children = list(mapping.values())
+        except Exception:
+            children = []
+        for child in children:
+            if hasattr(child, "get"):
+                found = search(child)
+                if found:
+                    return found
+        return ""
+
     try:
-        value = st.secrets.get("NVIDIA_API_KEY")
+        from_secrets = search(st.secrets)
     except Exception:
-        value = None
-    return str(value or os.environ.get("NVIDIA_API_KEY") or "").strip()
+        from_secrets = ""
+
+    for name in _KEY_NAMES:
+        from_secrets = from_secrets or os.environ.get(name, "")
+
+    return str(from_secrets).strip()
 
 
 def demo_banner(result: store.LoadResult) -> None:
