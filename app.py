@@ -18,9 +18,10 @@ from ledger.compute import (
     monthly_given,
     totals,
 )
+from ledger import store
 from ledger.models import Entry
 from ledger.money import Currency, format_money
-from ledger.ui import demo_banner, load_ledger, page_config
+from ledger.ui import clear_cache, demo_banner, load_ledger, page_config
 
 page_config("Personal Ledger")
 
@@ -29,6 +30,43 @@ demo_banner(result)
 
 st.title("Personal Ledger")
 st.caption(f"As of {date.today():%d %b %Y}")
+
+
+def _delete_control(entry: Entry, key: str) -> None:
+    """Two-click delete. The first click only arms it; the second does the work.
+
+    A single-click delete next to a list of real debts is an accident waiting to
+    happen, and the sheet has no undo of its own.
+    """
+    if entry.row is None:
+        return
+    armed = f"arm_{key}_{entry.row}"
+
+    if not st.session_state.get(armed):
+        if st.button("🗑", key=f"del_{key}_{entry.row}", help="Delete this entry"):
+            st.session_state[armed] = True
+            st.rerun()
+        return
+
+    confirm, cancel = st.columns(2)
+    if confirm.button("Yes", key=f"yes_{key}_{entry.row}", type="primary"):
+        try:
+            store.delete(entry)
+        except Exception as exc:  # noqa: BLE001 — show whatever the sheet said
+            st.error(f"Could not delete: {exc}")
+            st.session_state[armed] = False
+        else:
+            clear_cache()
+            st.session_state[armed] = False
+            st.toast(f"Deleted {entry.person} · {money_plain(entry)}")
+            st.rerun()
+    if cancel.button("No", key=f"no_{key}_{entry.row}"):
+        st.session_state[armed] = False
+        st.rerun()
+
+
+def money_plain(entry: Entry) -> str:
+    return format_money(entry.amount_minor, entry.currency)
 
 
 def render(entries: list[Entry], currency: Currency, key: str) -> None:
@@ -177,23 +215,27 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
         )
 
     with st.expander("All entries"):
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "Date": f"{e.date:%d %b %y}",
-                        "Person": e.person,
-                        "Ledger": e.ledger,
-                        "Direction": e.direction.value,
-                        "Amount": money(e.amount_minor, False),
-                        "Note": e.note,
-                    }
-                    for e in sorted(shown, key=lambda x: x.date, reverse=True)
-                ]
-            ),
-            hide_index=True,
-            width="stretch",
-        )
+        st.caption("Newest first. Delete asks twice — the sheet row goes for good.")
+        for e in sorted(shown, key=lambda x: x.date, reverse=True):
+            detail, link, remove = st.columns([6, 1.4, 1.4])
+            with detail:
+                arrow = "→ out" if e.signed_minor > 0 else "← back"
+                st.markdown(
+                    f"**{money(e.amount_minor)}** {arrow} · **{e.person}** · {e.ledger}  \n"
+                    f"<span style='opacity:.65'>{e.date:%d %b %Y}"
+                    + (f" · {e.note}" if e.note else "")
+                    + "</span>",
+                    unsafe_allow_html=True,
+                )
+            with link:
+                if e.attachment:
+                    st.link_button("📎 Statement", e.attachment, width="stretch")
+            with remove:
+                _delete_control(e, key)
+            st.divider()
+
+        if not shown:
+            st.caption("Nothing to show.")
 
 
 # Both currencies always get a tab, so the one you have not used yet is still

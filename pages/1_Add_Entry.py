@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import streamlit as st
@@ -70,6 +71,12 @@ with col_e:
 
 note = st.text_input("Note", placeholder="UPI, cash, cheque…")
 
+statement = st.file_uploader(
+    "Bank statement or receipt (optional)",
+    type=["pdf", "png", "jpg", "jpeg", "webp"],
+    help="Uploaded to your Drive folder and linked from the entry.",
+)
+
 # Validate before offering to save, so the preview is the thing that gets saved.
 problems: list[str] = []
 entry: Entry | None = None
@@ -108,6 +115,16 @@ for problem in problems:
 ready = entry is not None and not problems
 if st.button("Save entry", type="primary", disabled=not ready):
     try:
+        if statement is not None:
+            # Upload first: a saved row pointing at a file that never arrived
+            # would be worse than failing before anything is written.
+            with st.spinner(f"Uploading {statement.name}…"):
+                link = store.upload_attachment(
+                    statement.name,
+                    statement.getvalue(),
+                    statement.type or "application/octet-stream",
+                )
+            entry = replace(entry, attachment=link)
         store.append(entry)
     except RuntimeError as exc:
         # Demo mode: say so rather than pretending the row was written.

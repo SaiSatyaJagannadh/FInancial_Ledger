@@ -22,6 +22,21 @@ def clear_cache() -> None:
     _cached_load.clear()
 
 
+def api_key() -> str:
+    """The NVIDIA key, from Streamlit secrets or the environment.
+
+    Falls back to the environment so the assistant can be exercised locally
+    without a secrets.toml, which is how it gets tested.
+    """
+    import os
+
+    try:
+        value = st.secrets.get("NVIDIA_API_KEY")
+    except Exception:
+        value = None
+    return str(value or os.environ.get("NVIDIA_API_KEY") or "").strip()
+
+
 def demo_banner(result: store.LoadResult) -> None:
     """Say plainly which data is on screen. Silence here would be misleading."""
     if not result.demo:

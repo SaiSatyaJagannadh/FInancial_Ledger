@@ -9,8 +9,11 @@ from datetime import date, datetime
 from ledger.money import Currency, parse_currency, to_minor
 
 #: Sheet header, in order. Changing this changes the sheet contract.
-#: `currency` was added later; a sheet without it is read as rupees.
-COLUMNS = ["date", "person", "ledger", "direction", "amount", "currency", "note"]
+#: `currency` and `attachment` were added later; older sheets lack them and are
+#: read as rupees with no attachment, so old rows keep working untouched.
+COLUMNS = [
+    "date", "person", "ledger", "direction", "amount", "currency", "note", "attachment",
+]
 
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%d %b %Y", "%d %B %Y")
 
@@ -59,6 +62,8 @@ class Entry:
     amount_minor: int
     currency: Currency = Currency.INR
     note: str = ""
+    #: Link to a bank statement or receipt backing this entry. May be empty.
+    attachment: str = ""
     #: 1-based row in the sheet, when the entry came from one.
     row: int | None = field(default=None, compare=False)
 
@@ -108,6 +113,7 @@ class Entry:
             amount_minor=amount,
             currency=currency,
             note=str(row.get("note") or "").strip(),
+            attachment=str(row.get("attachment") or "").strip(),
             row=row_number,
         )
 
@@ -126,4 +132,5 @@ class Entry:
             f"{whole}.{frac:02d}",
             self.currency.value,
             self.note,
+            self.attachment,
         ]

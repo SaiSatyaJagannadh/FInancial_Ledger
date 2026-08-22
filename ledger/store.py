@@ -10,12 +10,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ledger.demo import build_demo_entries
-from ledger.models import COLUMNS, Entry, EntryError
+from ledger.models import COLUMNS, Entry, EntryError, parse_date, parse_direction
+from ledger.money import to_minor
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive.readonly",
+    # drive.file grants access only to files this app itself creates, which is
+    # all an attachment upload needs. Full drive scope would hand the service
+    # account the rest of the Drive for no reason.
+    "https://www.googleapis.com/auth/drive.file",
 ]
+
+#: Attachments larger than this are refused rather than sent. Bank statements
+#: are a few hundred KB; anything past this is a mistake worth naming.
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
 
 @dataclass
@@ -115,6 +124,104 @@ def append(entry: Entry, secrets: dict | None = None) -> None:
     worksheet = _open_worksheet(secrets)
     _ensure_header(worksheet)
     worksheet.append_row(entry.to_row(), value_input_option="USER_ENTERED")
+
+
+def delete(entry: Entry, secrets: dict | None = None) -> None:
+    """Remove one entry's row from the sheet.
+
+    Deletes by row number, and re-reads that row first to confirm it still holds
+    the entry we think it does: rows shift when anything else is deleted, and a
+    stale number would silently delete somebody else's record.
+    """
+    secrets = _secrets() if secrets is None else secrets
+    if not is_configured(secrets):
+        raise RuntimeError("Demo mode: there is no sheet to delete from.")
+    if entry.row is None:
+        raise RuntimeError("This entry has no sheet row, so it cannot be deleted.")
+
+    worksheet = _open_worksheet(secrets)
+    current = worksheet.row_values(entry.row)
+    if not _same_entry(current, entry):
+        raise RuntimeError(
+            f"Row {entry.row} no longer matches this entry — the sheet changed "
+            "since it was loaded. Reload and try again."
+        )
+    worksheet.delete_rows(entry.row)
+
+
+def _same_entry(cells: list[str], entry: Entry) -> bool:
+    """Does this raw sheet row still describe `entry`?
+
+    The amount is compared as a number, not as text: Sheets stores what we wrote
+    as "42.00" and hands it back as "42", so a string comparison would call
+    every row a mismatch and make deletion impossible.
+    """
+    if len(cells) < 5:
+        return False
+    try:
+        date_matches = parse_date(cells[0]) == entry.date
+        direction_matches = parse_direction(cells[3]) is entry.direction
+        amount_matches = to_minor(cells[4]) == entry.amount_minor
+    except (EntryError, ValueError):
+        return False
+    return (
+        date_matches
+        and cells[1].strip() == entry.person
+        and cells[2].strip() == entry.ledger
+        and direction_matches
+        and amount_matches
+    )
+
+
+def upload_attachment(
+    filename: str, data: bytes, mimetype: str, secrets: dict | None = None
+) -> str:
+    """Put one file in the configured Drive folder, returning a viewable link.
+
+    Uses a plain multipart POST over an authorised session rather than pulling
+    in the Drive client library for a single endpoint.
+    """
+    secrets = _secrets() if secrets is None else secrets
+    folder = (secrets.get("drive") or {}).get("folder_id")
+    if not folder:
+        raise RuntimeError(
+            "No Drive folder configured. Add a [drive] section with folder_id "
+            "to your secrets to enable attachments."
+        )
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        mb = MAX_ATTACHMENT_BYTES // (1024 * 1024)
+        raise RuntimeError(f"{filename} is larger than the {mb} MB attachment limit.")
+
+    import json as _json
+
+    from google.auth.transport.requests import AuthorizedSession
+    from google.oauth2.service_account import Credentials
+
+    credentials = Credentials.from_service_account_info(
+        dict(secrets["gcp_service_account"]), scopes=SCOPES
+    )
+    session = AuthorizedSession(credentials)
+
+    metadata = {"name": filename, "parents": [folder]}
+    boundary = "ledger-attachment-boundary"
+    body = b"".join([
+        f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode(),
+        _json.dumps(metadata).encode(),
+        f"\r\n--{boundary}\r\nContent-Type: {mimetype}\r\n\r\n".encode(),
+        data,
+        f"\r\n--{boundary}--\r\n".encode(),
+    ])
+    response = session.post(
+        "https://www.googleapis.com/upload/drive/v3/files",
+        params={"uploadType": "multipart", "fields": "id,webViewLink"},
+        data=body,
+        headers={"Content-Type": f"multipart/related; boundary={boundary}"},
+        timeout=120,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Drive rejected the upload ({response.status_code}): {response.text}")
+    result = response.json()
+    return result.get("webViewLink") or f"https://drive.google.com/file/d/{result['id']}/view"
 
 
 def _ensure_header(worksheet) -> None:

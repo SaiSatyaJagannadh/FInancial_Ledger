@@ -441,3 +441,13 @@ frontend/dist/
 .venv/
 __pycache__/
 .pytest_cache/
+
+# Google service-account keys. These are live credentials and this repo is
+# public; a single `git add -A` would otherwise publish them.
+*.json
+!package.json
+!package-lock.json
+!tsconfig*.json
+!.oxlintrc.json
+*-service-account*.json
+ledger_secrets.toml
