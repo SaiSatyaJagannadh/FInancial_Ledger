@@ -10,7 +10,7 @@ import streamlit as st
 from ledger import attach, store
 from ledger.models import BY_HAND, Direction, Entry, EntryError
 from ledger.money import Currency, format_money, spoken, to_minor
-from ledger.ui import clear_cache, demo_banner, entry_table, load_ledger, styles
+from ledger.ui import clear_cache, demo_banner, load_ledger, styles
 
 NEW = "➕ New…"
 
@@ -41,12 +41,29 @@ ledgers_for = {
 }
 
 
+# Each save starts a new "round", and every input's key carries the round
+# number. Clearing the session value alone is not enough: the browser keeps a
+# text input's typed value while the widget's identity is unchanged, so the
+# field would still *look* full even though the app had forgotten it. A new
+# key is a new widget, and a new widget renders empty.
+ROUND = st.session_state.setdefault("form_round", 0)
+
+
+def field(name: str) -> str:
+    return f"{name}_{ROUND}"
+
+
 def picker(label: str, options: list[str], key: str) -> str:
     """A select that also accepts a new value, so a new person needs no setup."""
-    choice = st.selectbox(label, [*options, NEW], key=f"{key}_choice")
+    choice = st.selectbox(label, [*options, NEW], key=field(f"{key}_choice"))
     if choice == NEW:
-        return st.text_input(f"New {label.lower()}", key=f"{key}_new").strip()
+        return st.text_input(f"New {label.lower()}", key=field(f"{key}_new")).strip()
     return choice
+
+
+# Set by a save; read on the next run so the message appears above an empty form.
+if st.session_state.pop("entry_saved", None):
+    st.success(st.session_state.pop("entry_saved_text", "Entry added."))
 
 
 col_a, col_b = st.columns(2)
@@ -67,7 +84,7 @@ with col_d:
     )
 with col_e:
     amount_text = st.text_input(
-        f"Amount ({currency.symbol}) *", placeholder="1500", key=f"amount_{currency.value}"
+        f"Amount ({currency.symbol}) *", placeholder="1500", key=field("amount")
     )
     # Read the figure back in lakhs. An extra zero is hard to see in "2500000"
     # and impossible to miss in "25 lakh".
@@ -81,11 +98,12 @@ with col_e:
             f"= {format_money(_typed, currency)}" + (f"  ·  **{_short}**" if _short else "")
         )
 
-note = st.text_input("Note", placeholder="UPI, cash, cheque…")
+note = st.text_input("Note", placeholder="UPI, cash, cheque…", key=field("note"))
 
 statement = st.file_uploader(
     "Bank statement or receipt (optional)",
     type=["pdf", "png", "jpg", "jpeg", "webp"],
+    key=field("statement"),
     help=(
         f"Kept inside the spreadsheet, up to {attach.MAX_BYTES // 1024} KB. "
         "Google does not allow this app to write to your Drive, so a link you "
@@ -162,38 +180,23 @@ if st.button("Save entry", type="primary", disabled=not ready):
     else:
         clear_cache()
         short = spoken(entry.amount_minor, entry.currency)
-        st.success(
+        st.session_state["form_round"] = ROUND + 1   # a fresh, empty form
+        st.session_state["entry_saved"] = True
+        st.session_state["entry_saved_text"] = (
             f"Added {format_money(entry.amount_minor, entry.currency)}"
             + (f" ({short})" if short else "")
-            + f" for {entry.person} on {entry.ledger}."
+            + f" for {entry.person} on {entry.ledger}. Ready for the next one."
         )
+        st.rerun()
 
 st.caption(
     "Amounts are always positive — Direction decides whether it counts as money out "
     "or money back."
 )
 
-# The entries live right here, under the form. Adding one and then hunting for
-# it on another page to fix a typo is the thing that makes a ledger annoying.
 st.divider()
-
-recent = sorted(result.entries, key=lambda e: (e.date, e.row or 0), reverse=True)
-mine = [e for e in recent if e.currency is currency]
-
-head, filter_col = st.columns([3, 1.4], vertical_alignment="bottom")
-with head:
-    st.subheader(f"{currency.flag}  {currency.label} entries")
-    st.caption("Newest first. Delete asks twice — the sheet row goes for good.")
-with filter_col:
-    only_person = st.selectbox(
-        "Show", ["Everyone", *sorted({e.person for e in mine})], label_visibility="collapsed",
-    )
-
-if only_person != "Everyone":
-    mine = [e for e in mine if e.person == only_person]
-
-SHOWN = 12
-entry_table(mine[:SHOWN], scope="add", empty=f"No {currency.label} entries yet.")
-
-if len(mine) > SHOWN:
-    st.caption(f"Showing the {SHOWN} most recent of {len(mine)}. The rest are on the Ledger page.")
+st.page_link(
+    "views/edit_entries.py",
+    label="Change or remove an entry",
+    icon=":material/edit_note:",
+)
