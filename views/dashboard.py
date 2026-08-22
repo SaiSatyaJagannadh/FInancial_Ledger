@@ -18,9 +18,10 @@ from ledger.compute import (
     monthly_given,
     totals,
 )
+from ledger import settle, store
 from ledger.models import Entry
 from ledger.money import Currency, compact, format_money
-from ledger.ui import demo_banner, entry_table, load_ledger, styles
+from ledger.ui import clear_cache, demo_banner, entry_table, load_ledger, styles
 
 styles()
 
@@ -29,6 +30,57 @@ demo_banner(result)
 
 st.title("Personal Ledger")
 st.caption(f"As of {date.today():%d %b %Y}")
+
+
+def _settle_control(person: str, entries: list[Entry], currency: Currency, key: str) -> None:
+    """Clear a person's balance by recording the repayment, not by deleting it.
+
+    Erasing the loan would lose the fact it ever happened. Writing the
+    repayment brings the net to zero and keeps the history, which is what a
+    ledger is for.
+    """
+    owed = settle.outstanding(entries, person, currency)
+    if owed <= 0:
+        st.caption("✓ Settled — nothing outstanding.")
+        return
+
+    armed = f"settle_{key}_{person}"
+    books = settle.open_ledgers(entries, person, currency)
+
+    if not st.session_state.get(armed):
+        left, right = st.columns([3, 1.4])
+        left.caption(
+            f"Outstanding: **{format_money(owed, currency)}** across "
+            f"{len(books)} ledger{'s' if len(books) != 1 else ''}."
+        )
+        if right.button("Mark settled", key=f"sb_{key}_{person}", width="stretch",
+                        help="Record that this has been paid back in full"):
+            st.session_state[armed] = True
+            st.rerun()
+        return
+
+    st.warning(
+        f"Record **{format_money(owed, currency)}** as repaid by **{person}**? "
+        "This writes a received entry for each open ledger — "
+        + ", ".join(f"{name} {format_money(amount, currency)}" for name, amount in books)
+        + " — so the balance becomes zero. Nothing is deleted."
+    )
+    yes, no = st.columns(2)
+    if yes.button("Yes, settle", key=f"sy_{key}_{person}", type="primary", width="stretch"):
+        made = settle.balancing_entries(entries, person, currency)
+        try:
+            for one in made:
+                store.append(one)
+        except Exception as exc:  # noqa: BLE001 — surface whatever the sheet said
+            st.error(f"Could not settle: {exc}")
+        else:
+            clear_cache()
+            st.session_state[armed] = False
+            st.toast(f"{person} settled")
+            st.rerun()
+    if no.button("Cancel", key=f"sn_{key}_{person}", width="stretch"):
+        st.session_state[armed] = False
+        st.rerun()
 
 
 def render(entries: list[Entry], currency: Currency, key: str) -> None:
@@ -204,6 +256,7 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
             + (f" ({short})" if short else "")
             + f" · {len(theirs)} entr{'y' if len(theirs) == 1 else 'ies'}"
         ):
+            _settle_control(r.person, entries, currency, key)
             entry_table(theirs, scope=f"{key}_{r.person}")
 
     st.divider()

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ledger import store
+from ledger import docs, store
 from dataclasses import replace
 
 from ledger.assistant import AssistantError, read_image, read_note, summarise
@@ -127,6 +127,42 @@ for index, turn in enumerate(st.session_state.chat):
 
         for problem in turn.get("rejected") or []:
             st.warning(f"Skipped — {problem}")
+
+        # More than one entry from one document almost always belongs to the
+        # same person and ledger. Ask once here rather than making it a fix on
+        # every row.
+        pending = turn.get("drafts") or []
+        if len(pending) > 1 and people:
+            with st.container(border=True):
+                st.markdown("**File all of these under one person?**")
+                who_col, book_col, go_col = st.columns([2, 2, 1])
+                bulk_person = who_col.selectbox(
+                    "Person", ["Leave as proposed", *people], key=f"bp_{index}",
+                    label_visibility="collapsed",
+                )
+                bulk_ledger = book_col.selectbox(
+                    "Ledger", ["Leave as proposed", *ledgers], key=f"bl_{index}",
+                    label_visibility="collapsed",
+                )
+                if go_col.button("Apply", key=f"ba_{index}"):
+                    for slot in range(len(pending)):
+                        current = st.session_state.get(
+                            f"tweak_{index}_{slot}", pending[slot].entry
+                        )
+                        changes = {}
+                        if bulk_person != "Leave as proposed":
+                            changes["person"] = bulk_person
+                        if bulk_ledger != "Leave as proposed":
+                            changes["ledger"] = bulk_ledger
+                        if changes:
+                            st.session_state[f"tweak_{index}_{slot}"] = replace(
+                                current, **changes
+                            )
+                    st.rerun()
+                st.caption(
+                    "A statement usually holds one person's transactions. "
+                    "Set them all at once, then check each amount."
+                )
 
         for slot, draft in enumerate(turn.get("drafts") or []):
             entry = draft.entry

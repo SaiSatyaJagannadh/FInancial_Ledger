@@ -13,7 +13,7 @@ from __future__ import annotations
 import io
 from datetime import date
 
-from ledger.compute import by_person, ledger_breakdown, totals
+from ledger.compute import by_person, ledger_breakdown, totals  # noqa: F401
 from ledger.models import Entry
 from ledger.money import Currency
 
@@ -246,3 +246,51 @@ def demo() -> None:
 
 if __name__ == "__main__":
     demo()
+
+
+# ------------------------------------------------------------------- sharing
+# WhatsApp and mailto links carry text, not files. Neither wa.me nor mailto can
+# attach anything, so what gets shared is a written summary and the person is
+# told plainly that the spreadsheet has to be sent the usual way.
+
+from urllib.parse import quote  # noqa: E402 — kept beside the code that uses it
+
+
+def summary_text(entries: list[Entry], *, today: date | None = None) -> str:
+    """A short, readable statement of the ledger, for pasting into a message."""
+    today = today or date.today()
+    if not entries:
+        return f"Personal Ledger — {today:%d %b %Y}\nNothing recorded yet."
+
+    lines = [f"Personal Ledger — as of {today:%d %b %Y}", ""]
+    for currency in Currency:
+        subset = [e for e in entries if e.currency is currency]
+        if not subset:
+            continue
+        overall = totals(subset, currency)
+        lines.append(f"{currency.label}")
+        lines.append(f"  Given     {_money(overall.given_minor, currency)}")
+        lines.append(f"  Received  {_money(overall.received_minor, currency)}")
+        lines.append(f"  Still owed {_money(overall.net_minor, currency)}")
+        lines.append("")
+        for summary in by_person(subset, currency):
+            if summary.net_minor == 0:
+                continue
+            owes = "owes me" if summary.net_minor > 0 else "I owe"
+            lines.append(
+                f"  {summary.person}: {owes} "
+                f"{_money(abs(summary.net_minor), currency)}"
+                f"  (last {summary.last_activity:%d %b %Y})"
+            )
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def whatsapp_link(text: str) -> str:
+    """A wa.me link that opens WhatsApp with the message pre-written."""
+    return f"https://wa.me/?text={quote(text)}"
+
+
+def email_link(text: str, subject: str = "Personal Ledger") -> str:
+    """A mailto: link with the summary as the body."""
+    return f"mailto:?subject={quote(subject)}&body={quote(text)}"

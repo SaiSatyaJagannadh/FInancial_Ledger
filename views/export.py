@@ -7,7 +7,7 @@ from datetime import date
 import streamlit as st
 
 from ledger.compute import ALL_TIME, PERIODS, filter_entries
-from ledger.export import to_excel, to_pdf
+from ledger.export import email_link, summary_text, to_excel, to_pdf, whatsapp_link
 from ledger.money import Currency, format_money
 from ledger.ui import demo_banner, load_ledger, styles
 
@@ -84,6 +84,23 @@ with pdf_col:
         mime="application/pdf",
         width="stretch",
     )
+
+st.divider()
+
+st.subheader("Share")
+st.caption(
+    "WhatsApp and email links carry text, not files — neither can attach a "
+    "document. This sends a written summary; to send the spreadsheet itself, "
+    "download it first and attach it the usual way."
+)
+
+shared = summary_text(chosen)
+st.text_area("What gets sent", value=shared, height=190, key="share_text")
+
+wa_col, mail_col = st.columns(2)
+wa_col.link_button("💬  Send on WhatsApp", whatsapp_link(shared), width="stretch")
+mail_col.link_button("✉️  Send by email", email_link(shared), width="stretch")
+st.caption("Both open with the message already written — pick the recipient there.")
 
 st.divider()
 with st.expander(f"Preview the {len(chosen)} rows going into these files"):
