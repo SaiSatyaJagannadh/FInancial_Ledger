@@ -27,10 +27,15 @@ VISION_MODEL = "meta/llama-3.2-90b-vision-instruct"
 #: the sheet's own attachment limit.
 MAX_IMAGE_BYTES = 180 * 1024
 
-_SCHEMA = """Return ONLY a JSON object, no prose, no markdown fence:
+_SCHEMA = """Reply with ONLY a JSON object, no prose, no markdown fence.
+
+When you are confident, propose entries:
 {"entries": [{"date": "YYYY-MM-DD", "person": "...", "ledger": "...",
 "direction": "given" | "received", "amount": "1234.56",
 "currency": "INR" | "USD", "note": "..."}]}
+
+When anything essential is missing or ambiguous, ASK INSTEAD:
+{"question": "one short question"}
 
 Rules:
 - "given" = the user handed money out. "received" = money came back to them.
@@ -38,9 +43,33 @@ Rules:
 - If a date is not stated, use today's date.
 - If the currency is not stated, use INR.
 - Reuse an existing person or ledger name EXACTLY when the text clearly refers
-  to one; otherwise use the name as written.
-- If you cannot tell the amount or the person, return {"entries": []}.
-Never invent an amount you did not read."""
+  to one.
+
+ASK a question rather than guessing when:
+- you cannot tell WHO the money involves, or HOW MUCH;
+- a name could be the person OR just detail for the note, and you are unsure;
+- the person is new and does not match any existing name closely;
+- the message says several things and you cannot tell how many entries it is.
+
+Obey standing instructions the user has given earlier in this conversation —
+for example "put all of these under one person", or "the names I mention are
+for the note, not the person". Those instructions outrank your own guess.
+
+Never invent an amount, a person, or a date you did not read. One good
+question is always better than a wrong entry."""
+
+
+@dataclass(frozen=True)
+class Reply:
+    """What came back: proposed entries, or a question, or nothing usable."""
+
+    drafts: list
+    rejected: list[str]
+    question: str = ""
+
+    def __iter__(self):
+        """Unpack as (drafts, rejected) so older call sites keep working."""
+        return iter((self.drafts, self.rejected))
 
 
 @dataclass(frozen=True)
@@ -62,6 +91,37 @@ def _context(people: list[str], ledgers: list[str], today: date) -> str:
     if ledgers:
         known += f"\nExisting ledgers: {', '.join(sorted(set(ledgers))[:40])}"
     return f"Today is {today.isoformat()}.{known}\n\n{_SCHEMA}"
+
+
+def canonical(name: str, known: list[str]) -> str:
+    """Snap a proposed name onto an existing one when it plainly means it.
+
+    The model writes "VIHAR" for a person recorded as "VIHAR DVM", and a ledger
+    that differs only by case fragments the ledger into two. Prompting alone
+    does not reliably fix this, so the match is made here where it can be
+    tested. Only unambiguous matches snap: an abbreviation that fits two
+    existing names is left alone rather than guessed at.
+    """
+    cleaned = name.strip()
+    if not cleaned or not known:
+        return cleaned
+
+    folded = cleaned.casefold()
+    for candidate in known:
+        if candidate.casefold() == folded:
+            return candidate
+
+    # A leading word-run of exactly one known name: "VIHAR" -> "VIHAR DVM".
+    starts = [c for c in known if c.casefold().startswith(folded + " ")]
+    if len(starts) == 1:
+        return starts[0]
+
+    # Or the other way round: "VIHAR DVM SIR" offered for "VIHAR DVM".
+    within = [c for c in known if folded.startswith(c.casefold() + " ")]
+    if len(within) == 1:
+        return within[0]
+
+    return cleaned
 
 
 def _post(payload: dict, api_key: str, timeout: int) -> str:
@@ -98,8 +158,17 @@ def _extract_json(text: str) -> dict:
         raise AssistantError(f"Reply was not valid JSON: {exc}") from exc
 
 
-def _to_drafts(payload: dict) -> tuple[list[Draft], list[str]]:
+def _to_reply(
+    payload: dict,
+    people: list[str] | None = None,
+    ledgers: list[str] | None = None,
+    person_ledgers: dict[str, list[str]] | None = None,
+) -> Reply:
     """Validate the model's rows through the same door a sheet row goes through."""
+    question = str(payload.get("question") or "").strip()
+    if question and not payload.get("entries"):
+        return Reply([], [], question=question)
+
     drafts: list[Draft] = []
     rejected: list[str] = []
     for raw in payload.get("entries") or []:
@@ -107,38 +176,63 @@ def _to_drafts(payload: dict) -> tuple[list[Draft], list[str]]:
             rejected.append(f"not an object: {raw!r}")
             continue
         row = {key: str(raw.get(key, "") or "") for key in COLUMNS if key != "attachment"}
+        row["person"] = canonical(row["person"], people or [])
+        row["ledger"] = canonical(row["ledger"], ledgers or [])
+        # A ledger that matches nothing known, for a person who keeps exactly
+        # one, is far more likely to be that ledger than a brand new one named
+        # after the person. You still see it before it saves.
+        owned = (person_ledgers or {}).get(row["person"], [])
+        if len(owned) == 1 and row["ledger"] not in (ledgers or []):
+            row["ledger"] = owned[0]
         try:
             drafts.append(Draft(entry=Entry.from_row(row), raw=raw))
         except EntryError as exc:
             rejected.append(f"{raw.get('person') or 'entry'}: {exc}")
-    return drafts, rejected
+    # Entries win over a question: if the model proposed rows it has decided,
+    # and showing a question beside them would just be noise.
+    return Reply(drafts, rejected, question="" if drafts else question)
 
 
 def read_note(
-    text: str,
+    text: str | list[dict],
     *,
     api_key: str,
     people: list[str] | None = None,
     ledgers: list[str] | None = None,
+    person_ledgers: dict[str, list[str]] | None = None,
     today: date | None = None,
     model: str = TEXT_MODEL,
     timeout: int = 60,
-) -> tuple[list[Draft], list[str]]:
-    """Read a typed or dictated note into draft entries."""
-    if not text.strip():
-        return [], []
+) -> Reply:
+    """Read a note, or a whole conversation, into draft entries or a question.
+
+    Pass the conversation rather than one line when you have it: an instruction
+    given three messages ago ("put these all under Nanna") has to still apply
+    now, and it only can if the model can still see it.
+    """
+    history = (
+        [{"role": "user", "content": text.strip()}]
+        if isinstance(text, str)
+        else [m for m in text if str(m.get("content", "")).strip()]
+    )
+    if not history:
+        return Reply([], [])
+
     payload = {
         "model": model,
         "temperature": 0.0,
         "max_tokens": 900,
         "messages": [
             {"role": "system",
-             "content": "You extract personal-lending ledger entries. "
+             "content": "You keep a personal-lending ledger for the user. "
                         + _context(people or [], ledgers or [], today or date.today())},
-            {"role": "user", "content": text.strip()},
+            *history,
         ],
     }
-    return _to_drafts(_extract_json(_post(payload, api_key, timeout)))
+    return _to_reply(
+        _extract_json(_post(payload, api_key, timeout)),
+        people, ledgers, person_ledgers,
+    )
 
 
 def read_image(
@@ -148,10 +242,11 @@ def read_image(
     api_key: str,
     people: list[str] | None = None,
     ledgers: list[str] | None = None,
+    person_ledgers: dict[str, list[str]] | None = None,
     today: date | None = None,
     model: str = VISION_MODEL,
     timeout: int = 120,
-) -> tuple[list[Draft], list[str]]:
+) -> Reply:
     """Read a statement or receipt image into draft entries."""
     if len(data) > MAX_IMAGE_BYTES:
         raise AssistantError(
@@ -175,7 +270,10 @@ def read_image(
             ]},
         ],
     }
-    return _to_drafts(_extract_json(_post(payload, api_key, timeout)))
+    return _to_reply(
+        _extract_json(_post(payload, api_key, timeout)),
+        people, ledgers, person_ledgers,
+    )
 
 
 def demo() -> None:
@@ -183,7 +281,7 @@ def demo() -> None:
     fenced = '```json\n{"entries": [{"date": "2026-01-05", "person": "Nanna", ' \
              '"ledger": "Home", "direction": "given", "amount": "5000", ' \
              '"currency": "INR", "note": "UPI"}]}\n```'
-    drafts, rejected = _to_drafts(_extract_json(fenced))
+    drafts, rejected = _to_reply(_extract_json(fenced))
     assert not rejected, rejected
     assert len(drafts) == 1
     assert drafts[0].entry.amount_minor == 500_000
@@ -192,7 +290,7 @@ def demo() -> None:
     chatty = 'Sure! Here is the entry:\n{"entries": [{"date": "2026-02-01", ' \
              '"person": "A", "ledger": "L", "direction": "received", ' \
              '"amount": "12.50", "currency": "USD"}]}\nHope that helps.'
-    drafts, _ = _to_drafts(_extract_json(chatty))
+    drafts, _ = _to_reply(_extract_json(chatty))
     assert drafts[0].entry.amount_minor == 1250
     assert drafts[0].entry.signed_minor == -1250  # received is money back
 
@@ -205,11 +303,21 @@ def demo() -> None:
         {"date": "nonsense", "person": "C", "ledger": "L",
          "direction": "given", "amount": "5"},
     ]}
-    drafts, rejected = _to_drafts(bad)
+    drafts, rejected = _to_reply(bad)
     assert drafts == [], drafts
     assert len(rejected) == 3, rejected
 
-    assert _to_drafts({"entries": []}) == ([], [])
+    assert _to_reply({"entries": []}).drafts == []
+
+    # A question comes back as a question, not as a silent empty result.
+    asked = _to_reply({"question": "Who did you give it to?"})
+    assert asked.question == "Who did you give it to?"
+    assert asked.drafts == []
+    # Entries win when the model sends both, since it clearly decided.
+    both = _to_reply({"question": "?", "entries": [
+        {"date": "2026-01-01", "person": "A", "ledger": "L",
+         "direction": "given", "amount": "5"}]})
+    assert len(both.drafts) == 1 and not both.question
     try:
         _extract_json("I could not find anything.")
     except AssistantError:

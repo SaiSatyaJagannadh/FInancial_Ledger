@@ -135,7 +135,7 @@ def test_append_writes_the_row_in_column_order(monkeypatch):
     )
     store.append(entry, secrets=CONFIGURED)
     assert written["row"] == [
-        "2026-01-24", "Father", "House repair", "given", "1200.50", "INR", "UPI", ""
+        "2026-01-24", "Father", "House repair", "given", "1200.50", "INR", "UPI", "", ""
     ]
 
 

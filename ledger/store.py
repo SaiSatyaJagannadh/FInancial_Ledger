@@ -149,6 +149,43 @@ def delete(entry: Entry, secrets: dict | None = None) -> None:
     worksheet.delete_rows(entry.row)
 
 
+def update(original: Entry, edited: Entry, secrets: dict | None = None) -> None:
+    """Replace one entry's row with an edited version.
+
+    Checks the row still holds `original` before writing, for the same reason
+    delete does: rows shift, and overwriting a stranger's record is worse than
+    refusing. The edit is written to `original.row` — where the entry actually
+    lives — not to whatever row `edited` happens to be carrying.
+    """
+    secrets = _secrets() if secrets is None else secrets
+    if not is_configured(secrets):
+        raise RuntimeError("Demo mode: there is no sheet to edit.")
+    if original.row is None:
+        raise RuntimeError("This entry has no sheet row, so it cannot be edited.")
+
+    worksheet = _open_worksheet(secrets)
+    if not _same_entry(worksheet.row_values(original.row), original):
+        raise RuntimeError(
+            f"Row {original.row} no longer matches this entry — the sheet changed "
+            "since it was loaded. Reload and try again."
+        )
+    row = edited.to_row()
+    last = _column_letter(len(row))
+    worksheet.update(
+        values=[row], range_name=f"A{original.row}:{last}{original.row}",
+        value_input_option="USER_ENTERED",
+    )
+
+
+def _column_letter(index: int) -> str:
+    """1 -> A, 26 -> Z, 27 -> AA. Small enough not to import a library for."""
+    letters = ""
+    while index > 0:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
 def _same_entry(cells: list[str], entry: Entry) -> bool:
     """Does this raw sheet row still describe `entry`?
 

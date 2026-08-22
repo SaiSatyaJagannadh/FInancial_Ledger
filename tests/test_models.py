@@ -97,7 +97,7 @@ def test_from_row_names_the_missing_column():
 def test_to_row_round_trips():
     entry = make(amount_minor=120_050, note="UPI")
     row = entry.to_row()
-    assert row == ["2026-01-01", "Brother", "Bike loan", "given", "1200.50", "INR", "UPI", ""]
+    assert row == ["2026-01-01", "Brother", "Bike loan", "given", "1200.50", "INR", "UPI", "", ""]
     again = Entry.from_row(dict(zip(COLUMNS, row)))
     assert again.amount_minor == entry.amount_minor
     assert again.date == entry.date

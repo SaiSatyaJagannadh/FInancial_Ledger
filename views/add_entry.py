@@ -8,7 +8,7 @@ from datetime import date
 import streamlit as st
 
 from ledger import store
-from ledger.models import Direction, Entry, EntryError
+from ledger.models import BY_HAND, Direction, Entry, EntryError
 from ledger.money import Currency, format_money, to_minor
 from ledger.ui import clear_cache, demo_banner, entry_ledger, load_ledger, styles
 
@@ -95,6 +95,7 @@ if amount_text.strip():
                 amount_minor=minor,
                 currency=currency,
                 note=note,
+                source=BY_HAND,
             )
     except ValueError as exc:
         problems.append(str(exc))

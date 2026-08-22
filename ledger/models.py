@@ -9,11 +9,27 @@ from datetime import date, datetime
 from ledger.money import Currency, parse_currency, to_minor
 
 #: Sheet header, in order. Changing this changes the sheet contract.
-#: `currency` and `attachment` were added later; older sheets lack them and are
-#: read as rupees with no attachment, so old rows keep working untouched.
+#: `currency`, `attachment` and `source` were added later; older sheets lack
+#: them and are read as rupees with no attachment and an unknown source, so old
+#: rows keep working untouched.
 COLUMNS = [
-    "date", "person", "ledger", "direction", "amount", "currency", "note", "attachment",
+    "date", "person", "ledger", "direction", "amount", "currency", "note",
+    "attachment", "source",
 ]
+
+#: How an entry got here. Recorded so you can tell a row you typed from one the
+#: assistant proposed — worth knowing when a figure looks wrong.
+BY_HAND = "manual"
+BY_CHAT = "chat"
+BY_IMAGE = "image"
+SOURCES = (BY_HAND, BY_CHAT, BY_IMAGE)
+
+SOURCE_LABELS = {
+    BY_HAND: "typed in",
+    BY_CHAT: "from chat",
+    BY_IMAGE: "read from an image",
+    "": "",
+}
 
 _DATE_FORMATS = ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%d %b %Y", "%d %B %Y")
 
@@ -64,6 +80,8 @@ class Entry:
     note: str = ""
     #: Link to a bank statement or receipt backing this entry. May be empty.
     attachment: str = ""
+    #: One of SOURCES. Empty on rows written before this was recorded.
+    source: str = ""
     #: 1-based row in the sheet, when the entry came from one.
     row: int | None = field(default=None, compare=False)
 
@@ -114,6 +132,7 @@ class Entry:
             currency=currency,
             note=str(row.get("note") or "").strip(),
             attachment=str(row.get("attachment") or "").strip(),
+            source=str(row.get("source") or "").strip().lower(),
             row=row_number,
         )
 
@@ -133,4 +152,5 @@ class Entry:
             self.currency.value,
             self.note,
             self.attachment,
+            self.source,
         ]

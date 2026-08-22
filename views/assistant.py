@@ -9,7 +9,10 @@ from __future__ import annotations
 import streamlit as st
 
 from ledger import store
+from dataclasses import replace
+
 from ledger.assistant import AssistantError, read_image, read_note
+from ledger.models import BY_CHAT, BY_IMAGE
 from ledger.money import format_money
 from ledger.ui import api_key, clear_cache, demo_banner, load_ledger, styles
 
@@ -19,7 +22,10 @@ result = load_ledger()
 demo_banner(result)
 
 st.title("Assistant")
-st.caption("Tell me what happened and I'll draft the entry. Nothing is saved until you press Save.")
+st.caption(
+    "Tell me what happened and I'll draft the entry. I ask when I'm unsure "
+    "rather than guessing, and nothing is saved until you press Save."
+)
 
 key = api_key()
 if not key:
@@ -37,29 +43,55 @@ if not key:
 people = sorted({e.person for e in result.entries})
 ledgers = sorted({e.ledger for e in result.entries})
 
+# Which ledgers each person actually keeps, so a proposed ledger can be snapped
+# to the real one instead of a new one named after them.
+person_ledgers: dict[str, list[str]] = {}
+for _entry in result.entries:
+    person_ledgers.setdefault(_entry.person, [])
+    if _entry.ledger not in person_ledgers[_entry.person]:
+        person_ledgers[_entry.person].append(_entry.ledger)
+
 if "chat" not in st.session_state:
     st.session_state.chat = [
         {"role": "assistant",
          "text": "Tell me what happened — for example *“I gave 2500 to Vihar today for the "
                  "UK ledger, by UPI”*. I'll work out the person, ledger, amount and "
-                 "direction, and show it to you before anything is saved.",
+                 "direction, and show it to you before anything is saved. "
+                 "If I'm not sure about something I'll ask rather than guess, and "
+                 "I'll remember instructions like *“put these all under one person”*.",
          "drafts": [], "rejected": []},
     ]
 
 
-def respond(drafts, rejected, source: str) -> None:
-    """Add one assistant turn describing what came back."""
-    if drafts:
+def respond(reply, source: str, via: str = BY_CHAT) -> None:
+    """Add one assistant turn: proposed entries, or a question back."""
+    drafts, rejected = reply.drafts, reply.rejected
+    if reply.question:
+        text = reply.question
+    elif drafts:
         text = f"Here {'is' if len(drafts) == 1 else 'are'} {len(drafts)} entr" \
                f"{'y' if len(drafts) == 1 else 'ies'} from {source}. Check the figures, then save."
     elif rejected:
         text = f"I read {source} but nothing was usable."
     else:
-        text = (f"I couldn't find a person and an amount in {source}. "
-                "Try naming who it was and how much, e.g. “gave Vihar 2500 today”.")
-    st.session_state.chat.append(
-        {"role": "assistant", "text": text, "drafts": drafts, "rejected": rejected}
-    )
+        text = (f"I couldn't make an entry out of {source}. "
+                "Tell me who it involves and how much.")
+    st.session_state.chat.append({
+        "role": "assistant", "text": text, "drafts": drafts,
+        "rejected": rejected, "via": via,
+    })
+
+
+def history() -> list[dict]:
+    """The conversation so far, for the model.
+
+    Sent in full so a standing instruction — "put these all under Nanna", "the
+    names I mention are for the note" — still applies several turns later.
+    """
+    return [
+        {"role": turn["role"], "content": turn["text"]}
+        for turn in st.session_state.chat[1:]  # skip the canned greeting
+    ]
 
 
 with st.expander("🖼️  Read a statement or receipt image instead"):
@@ -75,11 +107,11 @@ with st.expander("🖼️  Read a statement or receipt image instead"):
                 {"role": "user", "text": f"📎 {upload.name}", "drafts": [], "rejected": []}
             )
             try:
-                drafts, rejected = read_image(
+                reply = read_image(
                     upload.getvalue(), upload.type or "image/png",
                     api_key=key, people=people, ledgers=ledgers,
                 )
-                respond(drafts, rejected, "that image")
+                respond(reply, "that image", via=BY_IMAGE)
             except AssistantError as exc:
                 st.session_state.chat.append(
                     {"role": "assistant", "text": f"⚠️ {exc}", "drafts": [], "rejected": []}
@@ -108,7 +140,7 @@ for index, turn in enumerate(st.session_state.chat):
                 with right:
                     if st.button("Save", key=f"save_{index}_{slot}", type="primary"):
                         try:
-                            store.append(entry)
+                            store.append(replace(entry, source=turn.get("via", BY_CHAT)))
                         except Exception as exc:  # noqa: BLE001 — surface what the sheet said
                             st.error(f"Could not save: {type(exc).__name__}: {exc}")
                         else:
@@ -131,10 +163,11 @@ if message:
         {"role": "user", "text": message, "drafts": [], "rejected": []}
     )
     try:
-        drafts, rejected = read_note(
-            message, api_key=key, people=people, ledgers=ledgers
+        reply = read_note(
+            history(), api_key=key, people=people, ledgers=ledgers,
+            person_ledgers=person_ledgers,
         )
-        respond(drafts, rejected, "that")
+        respond(reply, "that")
     except AssistantError as exc:
         st.session_state.chat.append(
             {"role": "assistant", "text": f"⚠️ {exc}", "drafts": [], "rejected": []}
