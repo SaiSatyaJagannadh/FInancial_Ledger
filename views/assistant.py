@@ -55,7 +55,7 @@ for _entry in result.entries:
 if "chat" not in st.session_state:
     st.session_state.chat = [
         {"role": "assistant",
-         "text": "Tell me what happened — for example *“I gave 2500 to Vihar today for the "
+         "text": "Tell me what happened — for example *“I gave 2500 to Ravi today for the "
                  "UK ledger, by UPI”*. I'll work out the person, ledger, amount and "
                  "direction, and show it to you before anything is saved. "
                  "If I'm not sure about something I'll ask rather than guess, and "
@@ -88,7 +88,7 @@ def respond(reply, source: str, via: str = BY_CHAT) -> None:
 def history() -> list[dict]:
     """The conversation so far, for the model.
 
-    Sent in full so a standing instruction — "put these all under Nanna", "the
+    Sent in full so a standing instruction — "put these all under Amma", "the
     names I mention are for the note" — still applies several turns later.
     """
     return [
@@ -240,7 +240,7 @@ for index, turn in enumerate(st.session_state.chat):
                             })
                             st.rerun()
 
-message = st.chat_input("e.g. I gave 2500 to Vihar today for the UK ledger, by UPI")
+message = st.chat_input("e.g. I gave 2500 to Ravi today for the UK ledger, by UPI")
 if message:
     st.session_state.chat.append(
         {"role": "user", "text": message, "drafts": [], "rejected": []}

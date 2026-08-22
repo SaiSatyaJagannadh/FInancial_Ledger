@@ -26,6 +26,22 @@ COLUMN_HEADINGS = [
 ]
 
 
+def attachment_label(reference: str) -> str:
+    """What to print in an exported file for an attachment.
+
+    A raw "sheet:9f2a…" means nothing to someone reading the spreadsheet, and a
+    file kept inside the workbook has no URL to link to. Say where it is and
+    how to get it instead of printing an identifier.
+    """
+    from ledger import attach
+
+    if not reference:
+        return ""
+    if attach.is_stored(reference):
+        return f"In app (id {attach.id_of(reference)}) — open the entry to download"
+    return reference
+
+
 def _rows(entries: list[Entry]) -> list[list]:
     """One list per entry, in COLUMN_HEADINGS order, amounts as real numbers."""
     return [
@@ -37,7 +53,7 @@ def _rows(entries: list[Entry]) -> list[list]:
             entry.amount_minor / 100,
             entry.currency.value,
             entry.note,
-            entry.attachment,
+            attachment_label(entry.attachment),
         ]
         for entry in sorted(entries, key=lambda e: (e.date, e.person))
     ]
@@ -168,9 +184,10 @@ def to_pdf(entries: list[Entry], *, today: date | None = None) -> bytes:
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_fill_color(27, 42, 65)
         pdf.set_text_color(255, 255, 255)
-        widths = [24, 46, 46, 24, 34, 96]
+        widths = [22, 40, 40, 22, 32, 70, 44]
         for heading, width in zip(
-            ["Date", "Person", "Ledger", "Direction", "Amount", "Note"], widths
+            ["Date", "Person", "Ledger", "Direction", "Amount", "Note", "Attachment"],
+            widths,
         ):
             pdf.cell(width, 8, heading, border=0, fill=True)
         pdf.ln()
@@ -183,14 +200,18 @@ def to_pdf(entries: list[Entry], *, today: date | None = None) -> bytes:
                 fill = True
             else:
                 fill = False
-            note = entry.note if len(entry.note) <= 58 else entry.note[:55] + "..."
+            note = entry.note if len(entry.note) <= 42 else entry.note[:39] + "..."
+            mark = "yes — in app" if entry.attachment else ""
+            if entry.attachment and not entry.attachment.startswith("sheet:"):
+                mark = "link in .xlsx"
             cells = [
                 f"{entry.date:%d %b %Y}",
-                entry.person[:26],
-                entry.ledger[:26],
+                entry.person[:24],
+                entry.ledger[:24],
                 entry.direction.value,
                 _money(entry.amount_minor, currency),
                 note,
+                mark,
             ]
             for text, width in zip(cells, widths):
                 pdf.cell(width, 7, text, border=0, fill=fill)
@@ -210,10 +231,10 @@ def demo() -> None:
     from ledger.models import Direction
 
     entries = [
-        Entry(date=date(2026, 1, 5), person="Nanna", ledger="Home",
+        Entry(date=date(2026, 1, 5), person="Amma", ledger="Home",
               direction=Direction.given, amount_minor=500_000, currency=Currency.INR,
               note="UPI"),
-        Entry(date=date(2026, 2, 1), person="Nanna", ledger="Home",
+        Entry(date=date(2026, 2, 1), person="Amma", ledger="Home",
               direction=Direction.received, amount_minor=150_000, currency=Currency.INR),
         Entry(date=date(2026, 3, 1), person="Ravi", ledger="Books",
               direction=Direction.given, amount_minor=4_250, currency=Currency.USD),

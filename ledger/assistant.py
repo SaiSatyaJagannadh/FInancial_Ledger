@@ -38,7 +38,7 @@ When anything essential is missing or ambiguous, ASK INSTEAD:
 {"question": "one short question"}
 
 When the user is ASKING ABOUT the ledger rather than recording something —
-"how much does Vihar owe me", "what did I give this year", "give me a brief" —
+"how much does Ravi owe me", "what did I give this year", "give me a brief" —
 answer from the figures in the summary below:
 {"answer": "a short, direct answer"}
 Quote the figures exactly as the summary gives them. Never estimate a total
@@ -140,10 +140,39 @@ def _context(
     return f"Today is {today.isoformat()}.{known}{figures}\n\n{_SCHEMA}"
 
 
+#: Words and symbols that pin a currency. Checked against the user's own text,
+#: because the model gets this wrong more than anything else it is asked: every
+#: candidate model tested read "gave amma $250" as rupees.
+#: Matched on word boundaries, not as substrings: "rs" appears inside
+#: "dollars", which made a plain `in` test find both currencies at once and
+#: give up on every message that said "dollars".
+_CURRENCY_MARKS = {
+    "USD": (r"\$", r"\busd\b", r"\bdollars?\b"),
+    "INR": (r"₹", r"\brs\.?\b", r"\binr\b", r"\brupees?\b",
+            r"\blakhs?\b", r"\bcrores?\b"),
+}
+
+
+def currency_hint(text: str):
+    """The currency the text plainly states, or None when it is silent or mixed.
+
+    Only an unambiguous signal counts. A message mentioning both dollars and
+    rupees is left for the model, since correcting it would be a coin flip.
+    """
+    from ledger.money import Currency
+
+    lowered = str(text or "").lower()
+    found = {
+        code for code, marks in _CURRENCY_MARKS.items()
+        if any(re.search(mark, lowered) for mark in marks)
+    }
+    return Currency(found.pop()) if len(found) == 1 else None
+
+
 def canonical(name: str, known: list[str]) -> str:
     """Snap a proposed name onto an existing one when it plainly means it.
 
-    The model writes "VIHAR" for a person recorded as "VIHAR DVM", and a ledger
+    The model writes "RAVI" for a person recorded as "RAVI KUMAR", and a ledger
     that differs only by case fragments the ledger into two. Prompting alone
     does not reliably fix this, so the match is made here where it can be
     tested. Only unambiguous matches snap: an abbreviation that fits two
@@ -158,12 +187,12 @@ def canonical(name: str, known: list[str]) -> str:
         if candidate.casefold() == folded:
             return candidate
 
-    # A leading word-run of exactly one known name: "VIHAR" -> "VIHAR DVM".
+    # A leading word-run of exactly one known name: "RAVI" -> "RAVI KUMAR".
     starts = [c for c in known if c.casefold().startswith(folded + " ")]
     if len(starts) == 1:
         return starts[0]
 
-    # Or the other way round: "VIHAR DVM SIR" offered for "VIHAR DVM".
+    # Or the other way round: "RAVI KUMAR SIR" offered for "RAVI KUMAR".
     within = [c for c in known if folded.startswith(c.casefold() + " ")]
     if len(within) == 1:
         return within[0]
@@ -210,6 +239,7 @@ def _to_reply(
     people: list[str] | None = None,
     ledgers: list[str] | None = None,
     person_ledgers: dict[str, list[str]] | None = None,
+    said: str = "",
 ) -> Reply:
     """Validate the model's rows through the same door a sheet row goes through."""
     question = str(payload.get("question") or "").strip()
@@ -234,6 +264,10 @@ def _to_reply(
         owned = (person_ledgers or {}).get(row["person"], [])
         if len(owned) == 1 and row["ledger"] not in (ledgers or []):
             row["ledger"] = owned[0]
+        # The user wrote "$250"; trust that over whatever the model decided.
+        stated = currency_hint(said)
+        if stated is not None:
+            row["currency"] = stated.value
         try:
             drafts.append(Draft(entry=Entry.from_row(row), raw=raw))
         except EntryError as exc:
@@ -258,7 +292,7 @@ def read_note(
     """Read a note, or a whole conversation, into draft entries or a question.
 
     Pass the conversation rather than one line when you have it: an instruction
-    given three messages ago ("put these all under Nanna") has to still apply
+    given three messages ago ("put these all under Amma") has to still apply
     now, and it only can if the model can still see it.
     """
     history = (
@@ -284,6 +318,8 @@ def read_note(
     return _to_reply(
         _extract_json(_post(payload, api_key, timeout)),
         people, ledgers, person_ledgers,
+        said=" ".join(str(m.get("content", "")) for m in history
+                      if m.get("role") == "user"),
     )
 
 
@@ -330,14 +366,14 @@ def read_image(
 
 def demo() -> None:
     """Self-check for the parsing layer, which is what breaks. No network."""
-    fenced = '```json\n{"entries": [{"date": "2026-01-05", "person": "Nanna", ' \
+    fenced = '```json\n{"entries": [{"date": "2026-01-05", "person": "Amma", ' \
              '"ledger": "Home", "direction": "given", "amount": "5000", ' \
              '"currency": "INR", "note": "UPI"}]}\n```'
     drafts, rejected = _to_reply(_extract_json(fenced))
     assert not rejected, rejected
     assert len(drafts) == 1
     assert drafts[0].entry.amount_minor == 500_000
-    assert drafts[0].entry.person == "Nanna"
+    assert drafts[0].entry.person == "Amma"
 
     chatty = 'Sure! Here is the entry:\n{"entries": [{"date": "2026-02-01", ' \
              '"person": "A", "ledger": "L", "direction": "received", ' \

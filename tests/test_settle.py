@@ -17,51 +17,51 @@ def entry(person, ledger, minor, direction=Direction.given, currency=Currency.IN
 
 
 ROWS = [
-    entry("Vihar", "UK", 500_000),
-    entry("Vihar", "UK", 200_000, Direction.received),
-    entry("Vihar", "Home", 100_000),
-    entry("Nanna", "Home", 50_000),
+    entry("Ravi", "UK", 500_000),
+    entry("Ravi", "UK", 200_000, Direction.received),
+    entry("Ravi", "Home", 100_000),
+    entry("Amma", "Home", 50_000),
 ]
 
 
 def test_only_ledgers_with_money_owed_are_listed():
-    assert open_ledgers(ROWS, "Vihar", Currency.INR) == [("Home", 100_000), ("UK", 300_000)]
+    assert open_ledgers(ROWS, "Ravi", Currency.INR) == [("Home", 100_000), ("UK", 300_000)]
 
 
 def test_outstanding_is_the_sum_of_open_ledgers():
-    assert outstanding(ROWS, "Vihar", Currency.INR) == 400_000
+    assert outstanding(ROWS, "Ravi", Currency.INR) == 400_000
 
 
 def test_settling_lands_on_exactly_zero():
     """Not near zero — exactly. Integer minor units make that reachable."""
-    made = balancing_entries(ROWS, "Vihar", Currency.INR, today=date(2026, 8, 22))
+    made = balancing_entries(ROWS, "Ravi", Currency.INR, today=date(2026, 8, 22))
     after = ROWS + made
-    assert outstanding(after, "Vihar", Currency.INR) == 0
-    assert sum(e.signed_minor for e in after if e.person == "Vihar") == 0
+    assert outstanding(after, "Ravi", Currency.INR) == 0
+    assert sum(e.signed_minor for e in after if e.person == "Ravi") == 0
 
 
 def test_one_balancing_entry_per_open_ledger():
-    made = balancing_entries(ROWS, "Vihar", Currency.INR)
+    made = balancing_entries(ROWS, "Ravi", Currency.INR)
     assert {e.ledger for e in made} == {"UK", "Home"}
     assert all(e.direction is Direction.received for e in made)
 
 
 def test_nothing_is_deleted():
     """History is the point of a ledger; settling adds, never removes."""
-    made = balancing_entries(ROWS, "Vihar", Currency.INR)
+    made = balancing_entries(ROWS, "Ravi", Currency.INR)
     after = ROWS + made
     assert len(after) == len(ROWS) + 2
     assert all(original in after for original in ROWS)
 
 
 def test_other_people_are_untouched():
-    after = ROWS + balancing_entries(ROWS, "Vihar", Currency.INR)
-    assert outstanding(after, "Nanna", Currency.INR) == 50_000
+    after = ROWS + balancing_entries(ROWS, "Ravi", Currency.INR)
+    assert outstanding(after, "Amma", Currency.INR) == 50_000
 
 
 def test_settling_twice_adds_nothing():
-    after = ROWS + balancing_entries(ROWS, "Vihar", Currency.INR)
-    assert balancing_entries(after, "Vihar", Currency.INR) == []
+    after = ROWS + balancing_entries(ROWS, "Ravi", Currency.INR)
+    assert balancing_entries(after, "Ravi", Currency.INR) == []
 
 
 def test_a_ledger_where_you_owe_them_is_not_settleable():
@@ -89,7 +89,7 @@ def test_an_unknown_person_yields_nothing():
 def test_the_balancing_entry_is_marked_as_typed_in():
     from ledger.models import BY_HAND
 
-    assert balancing_entries(ROWS, "Vihar", Currency.INR)[0].source == BY_HAND
+    assert balancing_entries(ROWS, "Ravi", Currency.INR)[0].source == BY_HAND
 
 
 def test_a_partially_repaid_ledger_settles_only_the_remainder():

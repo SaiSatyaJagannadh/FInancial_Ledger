@@ -73,29 +73,29 @@ def demo() -> None:
                      direction=direction, amount_minor=minor, currency=currency)
 
     rows = [
-        entry("Vihar", "UK", 500_000),
-        entry("Vihar", "UK", 200_000, Direction.received),
-        entry("Vihar", "Home", 100_000),
-        entry("Nanna", "Home", 50_000),
+        entry("Ravi", "UK", 500_000),
+        entry("Ravi", "UK", 200_000, Direction.received),
+        entry("Ravi", "Home", 100_000),
+        entry("Amma", "Home", 50_000),
     ]
 
-    assert open_ledgers(rows, "Vihar", Currency.INR) == [("Home", 100_000), ("UK", 300_000)]
-    assert outstanding(rows, "Vihar", Currency.INR) == 400_000
+    assert open_ledgers(rows, "Ravi", Currency.INR) == [("Home", 100_000), ("UK", 300_000)]
+    assert outstanding(rows, "Ravi", Currency.INR) == 400_000
 
-    made = balancing_entries(rows, "Vihar", Currency.INR, today=date(2026, 8, 22))
+    made = balancing_entries(rows, "Ravi", Currency.INR, today=date(2026, 8, 22))
     assert len(made) == 2
     assert all(e.direction is Direction.received for e in made)
     assert sum(e.amount_minor for e in made) == 400_000
 
     # After settling, the net is exactly zero — not near it.
     after = rows + made
-    assert outstanding(after, "Vihar", Currency.INR) == 0
-    assert sum(e.signed_minor for e in after if e.person == "Vihar") == 0
-    # And Nanna is untouched.
-    assert outstanding(after, "Nanna", Currency.INR) == 50_000
+    assert outstanding(after, "Ravi", Currency.INR) == 0
+    assert sum(e.signed_minor for e in after if e.person == "Ravi") == 0
+    # And Amma is untouched.
+    assert outstanding(after, "Amma", Currency.INR) == 50_000
 
     # Settling twice adds nothing, because nothing is owed any more.
-    assert balancing_entries(after, "Vihar", Currency.INR) == []
+    assert balancing_entries(after, "Ravi", Currency.INR) == []
 
     # A ledger where you owe them is not settleable by being repaid.
     owing = [entry("Ravi", "Loan", 100_000, Direction.received)]

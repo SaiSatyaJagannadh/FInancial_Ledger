@@ -88,17 +88,17 @@ def test_a_corrupt_image_says_so():
 # ------------------------------------------------------------------ documents
 
 def test_a_csv_is_read_as_text():
-    got = read("s.csv", b"date,who,amount\n2026-01-01,Vihar,2500\n", "text/csv")
+    got = read("s.csv", b"date,who,amount\n2026-01-01,Ravi,2500\n", "text/csv")
     assert got.kind == "text"
-    assert "Vihar" in got.text and "2500" in got.text
+    assert "Ravi" in got.text and "2500" in got.text
 
 
 def test_a_spreadsheet_is_read_as_text():
-    data = workbook([["Date", "Person", "Amount"], ["2026-01-01", "Nanna", 2500]])
+    data = workbook([["Date", "Person", "Amount"], ["2026-01-01", "Amma", 2500]])
     got = read("book.xlsx", data,
                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     assert got.kind == "text"
-    assert "Nanna" in got.text and "2500" in got.text
+    assert "Amma" in got.text and "2500" in got.text
 
 
 def test_an_empty_spreadsheet_says_so():
@@ -107,7 +107,7 @@ def test_an_empty_spreadsheet_says_so():
 
 
 def test_plain_text_passes_through():
-    assert read("n.txt", b"gave 500 to nanna", "text/plain").text == "gave 500 to nanna"
+    assert read("n.txt", b"gave 500 to amma", "text/plain").text == "gave 500 to amma"
 
 
 def test_a_scanned_pdf_suggests_a_screenshot():

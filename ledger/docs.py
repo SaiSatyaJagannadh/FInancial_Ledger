@@ -199,13 +199,13 @@ def demo() -> None:
     import zipfile
 
     # CSV keeps its shape.
-    csv_bytes = b"date,person,amount\n2026-01-01,Vihar,2500\n2026-02-01,Nanna,900\n"
+    csv_bytes = b"date,person,amount\n2026-01-01,Ravi,2500\n2026-02-01,Amma,900\n"
     got = read("statement.csv", csv_bytes, "text/csv")
     assert got.kind == "text"
-    assert "Vihar" in got.text and "2500" in got.text
+    assert "Ravi" in got.text and "2500" in got.text
 
     # Plain text passes through.
-    assert read("note.txt", b"gave 500 to nanna", "text/plain").text == "gave 500 to nanna"
+    assert read("note.txt", b"gave 500 to amma", "text/plain").text == "gave 500 to amma"
 
     # An unknown type says so instead of guessing.
     try:

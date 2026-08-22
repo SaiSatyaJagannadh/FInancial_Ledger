@@ -10,9 +10,9 @@ from ledger.models import Direction, Entry
 from ledger.money import Currency
 
 ROWS = [
-    Entry(date=date(2026, 1, 1), person="Vihar", ledger="UK",
+    Entry(date=date(2026, 1, 1), person="Ravi", ledger="UK",
           direction=Direction.given, amount_minor=500_000),
-    Entry(date=date(2026, 2, 1), person="Vihar", ledger="UK",
+    Entry(date=date(2026, 2, 1), person="Ravi", ledger="UK",
           direction=Direction.received, amount_minor=200_000),
     Entry(date=date(2026, 3, 1), person="Sam", ledger="Books",
           direction=Direction.given, amount_minor=4_000, currency=Currency.USD),
@@ -21,7 +21,7 @@ ROWS = [
 
 def test_the_summary_names_who_owes_what():
     text = summary_text(ROWS, today=date(2026, 8, 22))
-    assert "Vihar" in text and "owes me" in text
+    assert "Ravi" in text and "owes me" in text
     assert "3,000.00" in text          # 5,000 given less 2,000 back
 
 
@@ -33,9 +33,9 @@ def test_both_currencies_appear_and_stay_apart():
 
 def test_a_settled_person_is_left_out():
     """A zero balance is not news; listing it makes the message longer for nothing."""
-    rows = ROWS + [Entry(date=date(2026, 4, 1), person="Vihar", ledger="UK",
+    rows = ROWS + [Entry(date=date(2026, 4, 1), person="Ravi", ledger="UK",
                          direction=Direction.received, amount_minor=300_000)]
-    assert "Vihar" not in summary_text(rows, today=date(2026, 8, 22))
+    assert "Ravi" not in summary_text(rows, today=date(2026, 8, 22))
 
 
 def test_an_empty_ledger_still_produces_a_message():

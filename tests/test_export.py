@@ -15,7 +15,7 @@ from ledger.money import Currency
 
 def entry(minor: int, direction=Direction.given, currency=Currency.INR, **kw) -> Entry:
     fields = dict(
-        date=date(2026, 1, 5), person="Nanna", ledger="Home",
+        date=date(2026, 1, 5), person="Amma", ledger="Home",
         direction=direction, amount_minor=minor, currency=currency, note="",
     )
     fields.update(kw)
@@ -78,7 +78,7 @@ def test_summary_nets_given_against_received():
     tab = sheet_of(
         [entry(1000), entry(400, direction=Direction.received)], name="Summary INR"
     )
-    rows = [r for r in tab.iter_rows(values_only=True) if r[0] == "Nanna"]
+    rows = [r for r in tab.iter_rows(values_only=True) if r[0] == "Amma"]
     _, given, received, net, *_ = rows[0]
     assert (given, received, net) == (10.0, 4.0, 6.0)
 

@@ -309,16 +309,18 @@ def attachment_is_stored(reference: str) -> bool:
 
 
 def attachment_button(reference: str, key: str) -> None:
-    """Offer a stored attachment for download.
+    """Show a stored attachment: preview it if it is an image, and download it.
 
-    Fetched only when asked for: reassembling every attachment on every page
-    load would make the list crawl once there are a few of them.
+    Fetched only when asked for. Reassembling every attachment on every page
+    load would make a long list crawl, so the first click gets the file and the
+    second saves it.
     """
     from ledger import attach
 
     want = f"want_{key}"
     if not st.session_state.get(want):
-        if st.button("📎 Get file", key=key, help="Fetch this attachment"):
+        if st.button("📎 View / download", key=key,
+                     help="Fetch this attachment from the sheet"):
             st.session_state[want] = True
             st.rerun()
         return
@@ -327,13 +329,20 @@ def attachment_button(reference: str, key: str) -> None:
     if stored is None:
         st.caption("📎 attachment missing")
         return
-    st.download_button(
-        f"⬇ {stored.name}",
-        data=stored.data,
-        file_name=stored.name,
-        mime=stored.mimetype,
-        key=f"dl_{key}",
+
+    if stored.mimetype.startswith("image/"):
+        st.image(stored.data, caption=stored.name, width="stretch")
+    else:
+        st.caption(f"📎 {stored.name} · {len(stored.data) // 1024} KB")
+
+    save, hide = st.columns(2)
+    save.download_button(
+        "⬇ Save", data=stored.data, file_name=stored.name,
+        mime=stored.mimetype, key=f"dl_{key}", width="stretch",
     )
+    if hide.button("Close", key=f"hide_{key}", width="stretch"):
+        st.session_state[want] = False
+        st.rerun()
 
 
 def _head_row(labels: list[str], widths: list[float]) -> None:
