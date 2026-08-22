@@ -13,9 +13,9 @@ import streamlit as st
 from ledger.compute import by_person
 from ledger.invest import DEFAULT_FREQUENCY, FREQUENCIES, what_if
 from ledger.money import Currency, format_money
-from ledger.ui import demo_banner, load_ledger, page_config
+from ledger.ui import demo_banner, load_ledger, styles
 
-page_config("Invested Instead")
+styles()
 
 result = load_ledger()
 demo_banner(result)

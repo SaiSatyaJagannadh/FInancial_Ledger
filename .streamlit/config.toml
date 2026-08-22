@@ -1,0 +1,13 @@
+# A khata is ruled in two inks. Ink blue-black carries the interface; vermilion
+# and green are reserved for direction of money and are set in ledger/ui.py.
+# Deliberately not cream-and-terracotta: this is paper, not parchment.
+[theme]
+base = "light"
+primaryColor = "#1B3A5C"
+backgroundColor = "#F7F6F2"
+secondaryBackgroundColor = "#EDEBE3"
+textColor = "#16202E"
+font = "sans serif"
+
+[server]
+maxUploadSize = 25

@@ -11,9 +11,9 @@ import streamlit as st
 from ledger import store
 from ledger.assistant import AssistantError, read_image, read_note
 from ledger.money import format_money
-from ledger.ui import api_key, clear_cache, demo_banner, load_ledger, page_config
+from ledger.ui import api_key, clear_cache, demo_banner, load_ledger, styles
 
-page_config("Assistant")
+styles()
 
 result = load_ledger()
 demo_banner(result)

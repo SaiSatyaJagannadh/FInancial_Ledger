@@ -1,4 +1,4 @@
-streamlit>=1.36
+streamlit>=1.49  # st.navigation, width="stretch"
 pandas>=2.2
 altair>=5.3
 
@@ -9,3 +9,8 @@ google-auth>=2.30
 # cryptography 45+ ships no wheel for some platforms and then tries to build a
 # Rust/OpenSSL extension from source. Pin below that so a plain pip install works.
 cryptography<45
+
+# Exports. openpyxl writes the workbook; fpdf2 draws the printable statement
+# and is pure Python, so it needs no system libraries on the deploy host.
+openpyxl>=3.1
+fpdf2>=2.7

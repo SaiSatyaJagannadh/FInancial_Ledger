@@ -10,11 +10,11 @@ import streamlit as st
 from ledger import store
 from ledger.models import Direction, Entry, EntryError
 from ledger.money import Currency, format_money, to_minor
-from ledger.ui import clear_cache, demo_banner, load_ledger, page_config
+from ledger.ui import clear_cache, demo_banner, entry_ledger, load_ledger, styles
 
 NEW = "➕ New…"
 
-page_config("Add Entry")
+styles()
 
 result = load_ledger()
 demo_banner(result)
@@ -136,8 +136,32 @@ if st.button("Save entry", type="primary", disabled=not ready):
         st.success(f"Saved {format_money(entry.amount_minor, entry.currency)} for {entry.person}.")
         st.balloons()
 
-st.divider()
 st.caption(
     "Amounts are always positive — Direction decides whether it counts as money out "
     "or money back."
 )
+
+# The entries live right here, under the form. Adding one and then hunting for
+# it on another page to fix a typo is the thing that makes a ledger annoying.
+st.divider()
+
+recent = sorted(result.entries, key=lambda e: (e.date, e.row or 0), reverse=True)
+mine = [e for e in recent if e.currency is currency]
+
+head, filter_col = st.columns([3, 1.4], vertical_alignment="bottom")
+with head:
+    st.subheader(f"{currency.flag}  {currency.label} entries")
+    st.caption("Newest first. Delete asks twice — the sheet row goes for good.")
+with filter_col:
+    only_person = st.selectbox(
+        "Show", ["Everyone", *sorted({e.person for e in mine})], label_visibility="collapsed",
+    )
+
+if only_person != "Everyone":
+    mine = [e for e in mine if e.person == only_person]
+
+SHOWN = 12
+entry_ledger(mine[:SHOWN], scope="add", empty=f"No {currency.label} entries yet.")
+
+if len(mine) > SHOWN:
+    st.caption(f"Showing the {SHOWN} most recent of {len(mine)}. The rest are on the Ledger page.")
