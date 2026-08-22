@@ -5,6 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from ledger import store
+from ledger.money import format_money
 
 CACHE_SECONDS = 60
 
@@ -123,6 +124,13 @@ _CSS = f"""
   .khata-who  {{ font-size: 1.02rem; font-weight: 600; color: {INK}; }}
   .khata-meta {{ font-size: .82rem; opacity: .62; }}
   .khata-src  {{ font-style: italic; opacity: .8; }}
+  .khata-head {{
+      font-size: .72rem; letter-spacing: .09em; text-transform: uppercase;
+      opacity: .55; font-weight: 600;
+  }}
+  .khata-cell {{ line-height: 1.35; padding: .1rem 0; }}
+  .khata-cell.khata-amount {{ font-size: 1.02rem; }}
+  .khata-rule-head {{ border-top-color: {INK}; opacity: .35; margin-bottom: .1rem; }}
   .khata-dir  {{ font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; opacity: .55; }}
 
   /* The ruled line is the signature. One hairline per entry, like the page of
@@ -287,6 +295,202 @@ def delete_control(entry, scope: str) -> bool:
         st.session_state[armed] = False
         st.rerun()
     return False
+
+
+#: One grid, one set of widths, so every row lines up down the page.
+_LEDGER_COLS = [1.5, 2.3, 1.8, 3.0, 1.35, 1.45]
+_LEDGER_HEADS = ["Date", "Amount", "Ledger", "Note", "", ""]
+
+
+def _head_row(labels: list[str], widths: list[float]) -> None:
+    cells = st.columns(widths, vertical_alignment="bottom")
+    for cell, text in zip(cells, labels):
+        if text:
+            cell.markdown(f'<div class="khata-head">{text}</div>', unsafe_allow_html=True)
+    st.markdown('<hr class="khata-rule khata-rule-head">', unsafe_allow_html=True)
+
+
+def entry_table(entries: list, scope: str, *, empty: str = "Nothing here yet.") -> None:
+    """Entries as an aligned grid: date, amount, ledger, note, edit, delete.
+
+    A grid rather than a free-flowing line, because reading down a column of
+    dates and a column of amounts is the whole point of a ledger — and the
+    previous flex layout put every row's amount in a different place.
+    """
+    just = st.session_state.pop("just_edited", None)
+    if just:
+        st.success(f"Updated {just}.")
+
+    if not entries:
+        st.caption(empty)
+        return
+
+    _head_row(_LEDGER_HEADS, _LEDGER_COLS)
+
+    for entry in entries:
+        when, amount, book, note, edit, remove = st.columns(
+            _LEDGER_COLS, vertical_alignment="center"
+        )
+        outgoing = entry.signed_minor > 0
+        when.markdown(
+            f'<div class="khata-cell">{entry.date:%d %b %Y}</div>', unsafe_allow_html=True
+        )
+        amount.markdown(
+            f'<div class="khata-cell khata-amount {"khata-out" if outgoing else "khata-back"}">'
+            f'{format_money(entry.amount_minor, entry.currency)}'
+            f'<span class="khata-dir"> {"gave" if outgoing else "got back"}</span></div>',
+            unsafe_allow_html=True,
+        )
+        book.markdown(f'<div class="khata-cell">{entry.ledger}</div>', unsafe_allow_html=True)
+        mark = _SOURCE_MARK.get(entry.source, "")
+        link = (f' · <a href="{entry.attachment}" target="_blank">📎</a>'
+                if entry.attachment else "")
+        note.markdown(
+            f'<div class="khata-cell khata-meta">{entry.note or "—"}'
+            + (f' <span class="khata-src">{mark}</span>' if mark else "")
+            + link + "</div>",
+            unsafe_allow_html=True,
+        )
+        with edit:
+            edit_control(entry, scope, [], [])
+        with remove:
+            delete_control(entry, scope)
+        st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
+
+
+_SPEND_COLS = [2.3, 1.5, 1.7, 2.8, 1.35, 1.45]
+_SPEND_HEADS = ["When", "", "Category", "Detail", "", ""]
+
+
+@st.dialog("Edit transaction")
+def _edit_transaction(t) -> None:
+    from dataclasses import replace
+
+    from ledger import spend
+    from ledger.models import BY_HAND, EntryError
+    from ledger.money import Currency, to_minor
+
+    kind_col, cat_col = st.columns(2)
+    kind = kind_col.radio(
+        "Kind", list(spend.Kind), index=list(spend.Kind).index(t.kind),
+        format_func=lambda k: k.label, horizontal=True,
+    )
+    category = cat_col.text_input("Category *", value=t.category)
+
+    from_col, to_col = st.columns(2)
+    start = from_col.date_input("From *", value=t.date, format="DD/MM/YYYY")
+    ongoing = to_col.checkbox("Runs over a period", value=t.ongoing)
+    end = to_col.date_input(
+        "Until", value=t.end_date or t.date, format="DD/MM/YYYY"
+    ) if ongoing else None
+
+    amount_col, currency_col = st.columns(2)
+    amount = amount_col.text_input(
+        f"Amount ({t.currency.symbol}) *", value=f"{t.amount_minor / 100:.2f}")
+    currency = currency_col.radio(
+        "Currency", list(Currency), index=list(Currency).index(t.currency),
+        format_func=lambda c: f"{c.flag}  {c.label}", horizontal=True,
+    )
+    description = st.text_input("Description", value=t.description)
+    note = st.text_input("Note", value=t.note)
+
+    edited = None
+    try:
+        edited = replace(
+            t, kind=kind, category=category.strip(), date=start, end_date=end,
+            amount_minor=to_minor(amount), currency=currency,
+            description=description.strip(), note=note.strip(), source=BY_HAND,
+        )
+    except (ValueError, EntryError) as exc:
+        st.error(str(exc))
+
+    save, cancel = st.columns(2)
+    if save.button("Save changes", type="primary", width="stretch", disabled=edited is None):
+        try:
+            spend.replace_row(t, edited)
+        except Exception as exc:  # noqa: BLE001 — surface what the sheet said
+            st.error(f"Could not save: {exc}")
+        else:
+            st.session_state["just_edited"] = f"{edited.category} · {edited.date:%d %b %Y}"
+            st.rerun()
+    if cancel.button("Cancel", width="stretch"):
+        st.rerun()
+
+
+def transaction_table(rows: list, scope: str, *, empty: str = "Nothing here yet.") -> None:
+    """General transactions as an aligned grid, with the period spelled out."""
+    from ledger import spend
+    from ledger.money import format_money as _fmt
+
+    just = st.session_state.pop("just_edited", None)
+    if just:
+        st.success(f"Updated {just}.")
+    if not rows:
+        st.caption(empty)
+        return
+
+    _head_row(_SPEND_HEADS, _SPEND_COLS)
+
+    for t in rows:
+        when, amount, category, detail, edit, remove = st.columns(
+            _SPEND_COLS, vertical_alignment="center"
+        )
+        out = t.kind is spend.Kind.spent
+        when.markdown(
+            f'<div class="khata-cell">{t.period}'
+            + ('<span class="khata-src"> ongoing</span>' if t.ongoing else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+        amount.markdown(
+            f'<div class="khata-cell khata-amount {"khata-out" if out else "khata-back"}">'
+            f'{_fmt(t.amount_minor, t.currency)}</div>',
+            unsafe_allow_html=True,
+        )
+        category.markdown(f'<div class="khata-cell">{t.category}</div>', unsafe_allow_html=True)
+        bits = " · ".join(x for x in (t.description, t.note) if x) or "—"
+        mark = _SOURCE_MARK.get(t.source, "")
+        detail.markdown(
+            f'<div class="khata-cell khata-meta">{bits}'
+            + (f' <span class="khata-src">{mark}</span>' if mark else "")
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+        with edit:
+            if t.row is not None and st.button("Edit", key=f"tedit_{scope}_{t.row}",
+                                               width="stretch"):
+                _edit_transaction(t)
+        with remove:
+            _remove_transaction(t, scope)
+        st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
+
+
+def _remove_transaction(t, scope: str) -> None:
+    """Two clicks, same as the ledger. The sheet has no undo."""
+    from ledger import spend
+
+    if t.row is None:
+        return
+    armed = f"tarm_{scope}_{t.row}"
+    if not st.session_state.get(armed):
+        if st.button("Delete", key=f"tdel_{scope}_{t.row}", width="stretch"):
+            st.session_state[armed] = True
+            st.rerun()
+        return
+    yes, no = st.columns(2)
+    if yes.button("Yes", key=f"tyes_{scope}_{t.row}", type="primary", width="stretch"):
+        try:
+            spend.remove(t)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Could not delete: {exc}")
+            st.session_state[armed] = False
+        else:
+            st.session_state[armed] = False
+            st.toast("Transaction deleted")
+            st.rerun()
+    if no.button("No", key=f"tno_{scope}_{t.row}", width="stretch"):
+        st.session_state[armed] = False
+        st.rerun()
 
 
 def entry_ledger(entries: list, scope: str, *, empty: str = "Nothing here yet.") -> None:

@@ -37,6 +37,13 @@ When you are confident, propose entries:
 When anything essential is missing or ambiguous, ASK INSTEAD:
 {"question": "one short question"}
 
+When the user is ASKING ABOUT the ledger rather than recording something —
+"how much does Vihar owe me", "what did I give this year", "give me a brief" —
+answer from the figures in the summary below:
+{"answer": "a short, direct answer"}
+Quote the figures exactly as the summary gives them. Never estimate a total
+that is not in the summary, and never invent a person who is not listed.
+
 Rules:
 - "given" = the user handed money out. "received" = money came back to them.
 - amount is always POSITIVE. Direction carries the sign.
@@ -61,11 +68,12 @@ question is always better than a wrong entry."""
 
 @dataclass(frozen=True)
 class Reply:
-    """What came back: proposed entries, or a question, or nothing usable."""
+    """What came back: entries, a question, an answer, or nothing usable."""
 
     drafts: list
     rejected: list[str]
     question: str = ""
+    answer: str = ""
 
     def __iter__(self):
         """Unpack as (drafts, rejected) so older call sites keep working."""
@@ -84,13 +92,52 @@ class AssistantError(RuntimeError):
     """The model could not be reached, or gave nothing usable."""
 
 
-def _context(people: list[str], ledgers: list[str], today: date) -> str:
+def summarise(entries: list) -> str:
+    """The ledger as a few lines of plain figures, for answering questions.
+
+    Computed here rather than left to the model: a total it works out itself is
+    a total that can be wrong, and being confidently wrong about money is the
+    one thing this must not do.
+    """
+    if not entries:
+        return "The ledger is empty."
+
+    from ledger.compute import by_person, totals
+    from ledger.money import Currency, format_money
+
+    lines: list[str] = []
+    for currency in Currency:
+        subset = [e for e in entries if e.currency is currency]
+        if not subset:
+            continue
+        overall = totals(subset, currency)
+        lines.append(
+            f"{currency.label}: given {format_money(overall.given_minor, currency)}, "
+            f"received {format_money(overall.received_minor, currency)}, "
+            f"still owed {format_money(overall.net_minor, currency)}, "
+            f"across {overall.records} entries."
+        )
+        for summary in by_person(subset, currency):
+            lines.append(
+                f"  - {summary.person}: owes "
+                f"{format_money(summary.net_minor, currency)} "
+                f"(given {format_money(summary.given_minor, currency)}, "
+                f"received {format_money(summary.received_minor, currency)}), "
+                f"last activity {summary.last_activity:%d %b %Y}."
+            )
+    return "\n".join(lines)
+
+
+def _context(
+    people: list[str], ledgers: list[str], today: date, summary: str = ""
+) -> str:
     known = ""
     if people:
         known += f"\nExisting people: {', '.join(sorted(set(people))[:40])}"
     if ledgers:
         known += f"\nExisting ledgers: {', '.join(sorted(set(ledgers))[:40])}"
-    return f"Today is {today.isoformat()}.{known}\n\n{_SCHEMA}"
+    figures = f"\n\nCurrent ledger:\n{summary}" if summary else ""
+    return f"Today is {today.isoformat()}.{known}{figures}\n\n{_SCHEMA}"
 
 
 def canonical(name: str, known: list[str]) -> str:
@@ -166,6 +213,9 @@ def _to_reply(
 ) -> Reply:
     """Validate the model's rows through the same door a sheet row goes through."""
     question = str(payload.get("question") or "").strip()
+    answer = str(payload.get("answer") or "").strip()
+    if answer and not payload.get("entries"):
+        return Reply([], [], answer=answer)
     if question and not payload.get("entries"):
         return Reply([], [], question=question)
 
@@ -200,6 +250,7 @@ def read_note(
     people: list[str] | None = None,
     ledgers: list[str] | None = None,
     person_ledgers: dict[str, list[str]] | None = None,
+    summary: str = "",
     today: date | None = None,
     model: str = TEXT_MODEL,
     timeout: int = 60,
@@ -225,7 +276,8 @@ def read_note(
         "messages": [
             {"role": "system",
              "content": "You keep a personal-lending ledger for the user. "
-                        + _context(people or [], ledgers or [], today or date.today())},
+                        + _context(people or [], ledgers or [], today or date.today(),
+                                   summary)},
             *history,
         ],
     }

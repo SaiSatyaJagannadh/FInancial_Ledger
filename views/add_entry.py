@@ -10,7 +10,7 @@ import streamlit as st
 from ledger import store
 from ledger.models import BY_HAND, Direction, Entry, EntryError
 from ledger.money import Currency, format_money, spoken, to_minor
-from ledger.ui import clear_cache, demo_banner, entry_ledger, load_ledger, styles
+from ledger.ui import clear_cache, demo_banner, entry_table, load_ledger, styles
 
 NEW = "➕ New…"
 
@@ -20,6 +20,7 @@ result = load_ledger()
 demo_banner(result)
 
 st.title("Add Entry")
+st.caption("Fields marked * are required — the rest you can leave blank.")
 
 currency = Currency(
     st.radio(
@@ -56,7 +57,7 @@ with col_b:
 
 col_c, col_d, col_e = st.columns([1, 1, 1])
 with col_c:
-    when = st.date_input("Date", value=date.today(), format="DD/MM/YYYY")
+    when = st.date_input("Date *", value=date.today(), format="DD/MM/YYYY")
 with col_d:
     direction = st.radio(
         "Direction",
@@ -66,7 +67,7 @@ with col_d:
     )
 with col_e:
     amount_text = st.text_input(
-        f"Amount ({currency.symbol})", placeholder="1500", key=f"amount_{currency.value}"
+        f"Amount ({currency.symbol}) *", placeholder="1500", key=f"amount_{currency.value}"
     )
     # Read the figure back in lakhs. An extra zero is hard to see in "2500000"
     # and impossible to miss in "25 lakh".
@@ -120,6 +121,17 @@ if entry is not None:
         f"{'to' if direction is Direction.given else 'from'} **{entry.person}** "
         f"on *{entry.ledger}*, dated {entry.date:%d %b %Y}."
     )
+
+# Name what is still missing rather than leaving a dead button with no reason.
+absent = []
+if not str(person or "").strip():
+    absent.append("Person")
+if not str(ledger_name or "").strip():
+    absent.append("Ledger")
+if not amount_text.strip():
+    absent.append("Amount")
+if absent:
+    st.warning("Still needed: **" + "**, **".join(absent) + "**")
 
 for problem in problems:
     st.error(problem)
@@ -177,7 +189,7 @@ if only_person != "Everyone":
     mine = [e for e in mine if e.person == only_person]
 
 SHOWN = 12
-entry_ledger(mine[:SHOWN], scope="add", empty=f"No {currency.label} entries yet.")
+entry_table(mine[:SHOWN], scope="add", empty=f"No {currency.label} entries yet.")
 
 if len(mine) > SHOWN:
     st.caption(f"Showing the {SHOWN} most recent of {len(mine)}. The rest are on the Ledger page.")

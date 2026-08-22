@@ -11,8 +11,9 @@ import streamlit as st
 from ledger import store
 from dataclasses import replace
 
-from ledger.assistant import AssistantError, read_image, read_note
-from ledger.models import BY_CHAT, BY_IMAGE
+from ledger.assistant import AssistantError, read_image, read_note, summarise
+from ledger.models import BY_CHAT, BY_IMAGE, Direction, EntryError
+from ledger.money import to_minor
 from ledger.money import format_money
 from ledger.ui import api_key, clear_cache, demo_banner, load_ledger, styles
 
@@ -66,7 +67,9 @@ if "chat" not in st.session_state:
 def respond(reply, source: str, via: str = BY_CHAT) -> None:
     """Add one assistant turn: proposed entries, or a question back."""
     drafts, rejected = reply.drafts, reply.rejected
-    if reply.question:
+    if reply.answer:
+        text = reply.answer
+    elif reply.question:
         text = reply.question
     elif drafts:
         text = f"Here {'is' if len(drafts) == 1 else 'are'} {len(drafts)} entr" \
@@ -127,9 +130,12 @@ for index, turn in enumerate(st.session_state.chat):
 
         for slot, draft in enumerate(turn.get("drafts") or []):
             entry = draft.entry
+            tweak = st.session_state.get(f"tweak_{index}_{slot}")
+            if tweak is not None:
+                entry = tweak
             arrow = "→ out" if entry.signed_minor > 0 else "← back"
             with st.container(border=True):
-                left, right = st.columns([4, 1])
+                left, middle, right = st.columns([4, 1, 1])
                 with left:
                     st.markdown(
                         f"**{format_money(entry.amount_minor, entry.currency)}** {arrow} · "
@@ -137,6 +143,47 @@ for index, turn in enumerate(st.session_state.chat):
                         f"{entry.date:%d %b %Y}"
                         + (f" · _{entry.note}_" if entry.note else "")
                     )
+
+                with st.expander("Change something before saving"):
+                    fix_who, fix_book = st.columns(2)
+                    new_person = fix_who.text_input(
+                        "Person", value=entry.person, key=f"p_{index}_{slot}")
+                    new_ledger = fix_book.text_input(
+                        "Ledger", value=entry.ledger, key=f"l_{index}_{slot}")
+                    fix_when, fix_dir, fix_amt = st.columns([1.2, 1.3, 1.2])
+                    new_date = fix_when.date_input(
+                        "Date", value=entry.date, format="DD/MM/YYYY", key=f"d_{index}_{slot}")
+                    new_dir = fix_dir.radio(
+                        "Direction", list(Direction),
+                        index=list(Direction).index(entry.direction),
+                        format_func=lambda d: "I gave them" if d is Direction.given
+                        else "They gave me back",
+                        key=f"dir_{index}_{slot}")
+                    new_amount = fix_amt.text_input(
+                        f"Amount ({entry.currency.symbol})",
+                        value=f"{entry.amount_minor / 100:.2f}", key=f"a_{index}_{slot}")
+                    new_note = st.text_input(
+                        "Note", value=entry.note, key=f"n_{index}_{slot}")
+
+                    try:
+                        fixed = replace(
+                            entry, person=new_person.strip(), ledger=new_ledger.strip(),
+                            date=new_date, direction=new_dir,
+                            amount_minor=to_minor(new_amount), note=new_note.strip(),
+                        )
+                    except (ValueError, EntryError) as exc:
+                        st.error(str(exc))
+                    else:
+                        if fixed.to_row() != entry.to_row():
+                            st.session_state[f"tweak_{index}_{slot}"] = fixed
+                            st.rerun()
+
+                with middle:
+                    if st.button("Discard", key=f"drop_{index}_{slot}"):
+                        st.session_state.chat[index]["drafts"] = [
+                            d for i, d in enumerate(turn["drafts"]) if i != slot
+                        ]
+                        st.rerun()
                 with right:
                     if st.button("Save", key=f"save_{index}_{slot}", type="primary"):
                         try:
@@ -165,7 +212,7 @@ if message:
     try:
         reply = read_note(
             history(), api_key=key, people=people, ledgers=ledgers,
-            person_ledgers=person_ledgers,
+            person_ledgers=person_ledgers, summary=summarise(result.entries),
         )
         respond(reply, "that")
     except AssistantError as exc:

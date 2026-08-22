@@ -75,7 +75,13 @@ def is_configured(secrets: dict | None = None) -> bool:
     return bool(account) and bool(sheet.get("url") or sheet.get("id"))
 
 
-def _open_worksheet(secrets: dict):
+def _open_worksheet(secrets: dict, tab: str | None = None):
+    """One tab of the workbook. `tab` overrides the configured default.
+
+    A missing tab is created rather than raising: the second tab only exists
+    once something has been written to it, and a first-run crash is not a
+    useful way to learn that.
+    """
     import gspread
     from google.oauth2.service_account import Credentials
 
@@ -85,8 +91,13 @@ def _open_worksheet(secrets: dict):
     client = gspread.authorize(credentials)
 
     book = client.open_by_url(sheet["url"]) if sheet.get("url") else client.open_by_key(sheet["id"])
-    name = sheet.get("worksheet")
-    return book.worksheet(name) if name else book.sheet1
+    name = tab or sheet.get("worksheet")
+    if not name:
+        return book.sheet1
+    try:
+        return book.worksheet(name)
+    except Exception:
+        return book.add_worksheet(title=name, rows=200, cols=20)
 
 
 def load(secrets: dict | None = None) -> LoadResult:
@@ -220,10 +231,15 @@ def upload_attachment(
     """
     secrets = _secrets() if secrets is None else secrets
     folder = (secrets.get("drive") or {}).get("folder_id")
+    account = (secrets.get("gcp_service_account") or {}).get("client_email", "the service account")
     if not folder:
         raise RuntimeError(
-            "No Drive folder configured. Add a [drive] section with folder_id "
-            "to your secrets to enable attachments."
+            "Attachments need a Drive folder. Two steps, both one-off:\n\n"
+            "1. In Google Drive, make a folder and share it with "
+            f"**{account}** as **Editor**.\n"
+            "2. Add its id — the last part of the folder's URL — to your "
+            "Streamlit secrets, above every [section] heading:\n\n"
+            "```toml\n[drive]\nfolder_id = \"...\"\n```"
         )
     if len(data) > MAX_ATTACHMENT_BYTES:
         mb = MAX_ATTACHMENT_BYTES // (1024 * 1024)
@@ -255,6 +271,21 @@ def upload_attachment(
         headers={"Content-Type": f"multipart/related; boundary={boundary}"},
         timeout=120,
     )
+    if response.status_code == 404:
+        # The folder exists for you but not for the service account, which is
+        # what "not found" means when the id is right: it cannot see it.
+        raise RuntimeError(
+            f"Drive cannot see folder {folder}. Open it in Drive, press Share, "
+            f"and add **{account}** as **Editor**. A service account has no "
+            "storage of its own, so it can only write into a folder you share "
+            "with it — there is no way around this step."
+        )
+    if response.status_code == 403 and "storage quota" in response.text:
+        raise RuntimeError(
+            "Drive refused because the folder is not one you own and shared. "
+            f"Share a folder in your own Drive with **{account}** as Editor "
+            "and use that folder's id."
+        )
     if response.status_code >= 400:
         raise RuntimeError(f"Drive rejected the upload ({response.status_code}): {response.text}")
     result = response.json()

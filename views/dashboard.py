@@ -20,7 +20,7 @@ from ledger.compute import (
 )
 from ledger.models import Entry
 from ledger.money import Currency, compact, format_money
-from ledger.ui import demo_banner, entry_ledger, load_ledger, styles
+from ledger.ui import demo_banner, entry_table, load_ledger, styles
 
 styles()
 
@@ -204,7 +204,7 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
             + (f" ({short})" if short else "")
             + f" · {len(theirs)} entr{'y' if len(theirs) == 1 else 'ies'}"
         ):
-            entry_ledger(theirs, scope=f"{key}_{r.person}")
+            entry_table(theirs, scope=f"{key}_{r.person}")
 
     st.divider()
 
@@ -230,7 +230,7 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
 
     with st.expander(f"All {len(shown)} entries", expanded=False):
         st.caption("Newest first. Delete asks twice — the sheet row goes for good.")
-        entry_ledger(
+        entry_table(
             sorted(shown, key=lambda x: (x.date, x.row or 0), reverse=True),
             scope=key,
         )
