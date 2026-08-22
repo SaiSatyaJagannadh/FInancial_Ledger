@@ -200,21 +200,61 @@ def canonical(name: str, known: list[str]) -> str:
     return cleaned
 
 
+#: A timeout or a dropped connection is usually a blip on NVIDIA's side, and
+#: trying again costs a couple of seconds. A 4xx never is: a bad key or a
+#: malformed request will fail identically every time, so those are not retried.
+ATTEMPTS = 3
+BACKOFF_SECONDS = 1.5
+
+
 def _post(payload: dict, api_key: str, timeout: int) -> str:
+    """One chat completion, as text.
+
+    Every network failure leaves this function as an AssistantError. Callers
+    catch that; letting a requests exception escape put a red traceback on the
+    page instead of a message the reader could act on.
+    """
+    import time
+
     import requests
 
-    response = requests.post(
-        BASE_URL,
-        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
-        json=payload,
-        timeout=timeout,
-    )
-    if response.status_code >= 400:
-        raise AssistantError(f"NVIDIA API error {response.status_code}: {response.text[:300]}")
-    try:
-        return response.json()["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, ValueError) as exc:
-        raise AssistantError(f"Unexpected response shape: {exc}") from exc
+    last = ""
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            response = requests.post(
+                BASE_URL,
+                headers={"Authorization": f"Bearer {api_key}",
+                         "Accept": "application/json"},
+                json=payload,
+                timeout=timeout,
+            )
+        except requests.exceptions.Timeout:
+            last = (
+                f"The model did not answer within {timeout} seconds. "
+                "It is usually busy rather than broken — try again."
+            )
+        except requests.exceptions.ConnectionError:
+            last = "Could not reach the model. Check the connection and try again."
+        except requests.exceptions.RequestException as exc:
+            last = f"The request failed ({type(exc).__name__})."
+        else:
+            if response.status_code >= 500:
+                # The server is having a moment; the same request may well work.
+                last = f"NVIDIA returned {response.status_code}. That is their end, not yours."
+            elif response.status_code >= 400:
+                raise AssistantError(
+                    f"NVIDIA API error {response.status_code}: {response.text[:300]}"
+                )
+            else:
+                try:
+                    return response.json()["choices"][0]["message"]["content"]
+                except (KeyError, IndexError, ValueError) as exc:
+                    raise AssistantError(f"Unexpected response shape: {exc}") from exc
+
+        if attempt < ATTEMPTS:
+            time.sleep(BACKOFF_SECONDS * attempt)
+
+    raise AssistantError(f"{last} (tried {ATTEMPTS} times)")
 
 
 def _extract_json(text: str) -> dict:
@@ -287,7 +327,7 @@ def read_note(
     summary: str = "",
     today: date | None = None,
     model: str = TEXT_MODEL,
-    timeout: int = 60,
+    timeout: int = 90,
 ) -> Reply:
     """Read a note, or a whole conversation, into draft entries or a question.
 
@@ -333,7 +373,7 @@ def read_image(
     person_ledgers: dict[str, list[str]] | None = None,
     today: date | None = None,
     model: str = VISION_MODEL,
-    timeout: int = 120,
+    timeout: int = 150,
 ) -> Reply:
     """Read a statement or receipt image into draft entries."""
     if len(data) > MAX_IMAGE_BYTES:

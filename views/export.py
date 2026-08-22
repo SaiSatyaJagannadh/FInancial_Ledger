@@ -103,6 +103,30 @@ mail_col.link_button("✉️  Send by email", email_link(shared), width="stretch
 st.caption("Both open with the message already written — pick the recipient there.")
 
 st.divider()
+
+with st.expander("Where is my data kept?"):
+    st.markdown(
+        """
+Everything lives in **one Google Sheet**, private to you and shared only with
+the app's service account. Three tabs:
+
+| Tab | Holds |
+|---|---|
+| `entries` | The lending ledger |
+| `transactions` | General spending |
+| `attachments` | Uploaded images and PDFs |
+
+**Attachments are in the sheet, not Google Drive.** Google does not let a
+service account own files in Drive without a paid Workspace account, so an
+uploaded file is stored inside the `attachments` tab and rebuilt when you open
+it. Open an entry and press **View / download** to get the original back.
+
+**GitHub holds the code only** — no entries, no amounts, no keys, no sheet
+address. Your credentials live in Streamlit's encrypted secrets, never in the
+repository.
+        """
+    )
+
 with st.expander(f"Preview the {len(chosen)} rows going into these files"):
     st.dataframe(
         [

@@ -11,10 +11,9 @@ import streamlit as st
 from ledger import docs, store
 from dataclasses import replace
 
-from ledger.assistant import AssistantError, read_image, read_note, summarise
+from ledger.assistant import read_image, read_note, summarise
 from ledger.models import BY_CHAT, BY_IMAGE, Direction, EntryError
-from ledger.money import to_minor
-from ledger.money import format_money
+from ledger.money import format_money, to_minor
 from ledger.ui import api_key, clear_cache, demo_banner, load_ledger, styles
 
 styles()
@@ -97,28 +96,61 @@ def history() -> list[dict]:
     ]
 
 
-with st.expander("🖼️  Read a statement or receipt image instead"):
+with st.expander("📄  Read a statement, spreadsheet or photo"):
+    st.caption(
+        "PDF, Excel, CSV or an image. A document is read as text, which is far "
+        "more accurate than reading a picture of it. Large photos are shrunk "
+        "automatically rather than refused."
+    )
     upload = st.file_uploader(
-        "Screenshot of a bank statement, a UPI receipt, a photo of a note",
-        type=["png", "jpg", "jpeg", "webp"],
-        key="assistant_image",
+        "Bank statement, UPI receipt, spreadsheet, photo of a note",
+        type=docs.ACCEPTED,
+        key="assistant_doc",
     )
     if upload is not None:
-        st.image(upload, width=320)
-        if st.button("Read this image", type="primary"):
+        if docs.suffix_of(upload.name) in docs.IMAGE_SUFFIXES:
+            st.image(upload, width=320)
+        else:
+            st.caption(f"{upload.name} · {len(upload.getvalue()) // 1024} KB")
+
+        if st.button("Read this", type="primary"):
             st.session_state.chat.append(
-                {"role": "user", "text": f"📎 {upload.name}", "drafts": [], "rejected": []}
+                {"role": "user", "text": f"📄 {upload.name}", "drafts": [], "rejected": []}
             )
-            try:
-                reply = read_image(
-                    upload.getvalue(), upload.type or "image/png",
-                    api_key=key, people=people, ledgers=ledgers,
-                )
-                respond(reply, "that image", via=BY_IMAGE)
-            except AssistantError as exc:
-                st.session_state.chat.append(
-                    {"role": "assistant", "text": f"⚠️ {exc}", "drafts": [], "rejected": []}
-                )
+            with st.chat_message("assistant"), st.spinner(f"Reading {upload.name}…"):
+                try:
+                    readable = docs.read(
+                        upload.name, upload.getvalue(), upload.type or ""
+                    )
+                    if readable.note:
+                        st.session_state.chat.append({
+                            "role": "assistant", "text": f"_{readable.note}_",
+                            "drafts": [], "rejected": [],
+                        })
+                    if readable.kind == "image":
+                        reply = read_image(
+                            readable.data, readable.mimetype,
+                            api_key=key, people=people, ledgers=ledgers,
+                            person_ledgers=person_ledgers,
+                        )
+                        via = BY_IMAGE
+                    else:
+                        reply = read_note(
+                            [{"role": "user",
+                              "content": f"These are the contents of {upload.name}. "
+                                         "Pull out every money transfer where I lent "
+                                         "money out or was repaid.\n\n" + readable.text}],
+                            api_key=key, people=people, ledgers=ledgers,
+                            person_ledgers=person_ledgers,
+                            summary=summarise(result.entries),
+                        )
+                        via = BY_IMAGE
+                    respond(reply, f"**{upload.name}**", via=via)
+                except Exception as exc:  # noqa: BLE001 — nothing may reach the page
+                    st.session_state.chat.append({
+                        "role": "assistant", "text": f"⚠️ {exc}",
+                        "drafts": [], "rejected": [],
+                    })
             st.rerun()
 
 for index, turn in enumerate(st.session_state.chat):
@@ -240,22 +272,52 @@ for index, turn in enumerate(st.session_state.chat):
                             })
                             st.rerun()
 
-message = st.chat_input("e.g. I gave 2500 to Ravi today for the UK ledger, by UPI")
-if message:
-    st.session_state.chat.append(
-        {"role": "user", "text": message, "drafts": [], "rejected": []}
-    )
+def ask(text: str) -> None:
+    """Send one message and record the reply.
+
+    Anything that goes wrong becomes a chat turn with the text kept for a
+    retry. An exception reaching the page is a red traceback, which tells the
+    reader nothing and loses what they typed.
+    """
     try:
         reply = read_note(
             history(), api_key=key, people=people, ledgers=ledgers,
             person_ledgers=person_ledgers, summary=summarise(result.entries),
         )
+    except Exception as exc:  # noqa: BLE001 — nothing may reach the page
+        st.session_state.chat.append({
+            "role": "assistant", "text": f"⚠️ {exc}",
+            "drafts": [], "rejected": [], "failed": text,
+        })
+    else:
         respond(reply, "that")
-    except AssistantError as exc:
-        st.session_state.chat.append(
-            {"role": "assistant", "text": f"⚠️ {exc}", "drafts": [], "rejected": []}
-        )
+
+
+message = st.chat_input("e.g. I gave 2500 to Ravi today for the UK ledger, by UPI")
+if message:
+    st.session_state.chat.append(
+        {"role": "user", "text": message, "drafts": [], "rejected": []}
+    )
+    # Draw the message before the model is called. Everything below is written
+    # to session state and only rendered on the rerun, so without this the page
+    # sits unchanged for several seconds — not even showing what was typed.
+    with st.chat_message("user"):
+        st.markdown(message)
+    with st.chat_message("assistant"), st.spinner("Reading that…"):
+        ask(message)
     st.rerun()
+
+# A failed turn keeps its text, so a blip costs a click rather than a retype.
+last = st.session_state.chat[-1] if st.session_state.chat else {}
+if last.get("failed"):
+    again, drop = st.columns([1, 4])
+    if again.button("Try again", type="primary"):
+        text = last["failed"]
+        st.session_state.chat.pop()          # the failure notice
+        with st.chat_message("assistant"), st.spinner("Trying again…"):
+            ask(text)
+        st.rerun()
+    drop.caption("Nothing was saved. Your message is kept — press to send it again.")
 
 if len(st.session_state.chat) > 1 and st.button("Clear chat"):
     del st.session_state.chat
