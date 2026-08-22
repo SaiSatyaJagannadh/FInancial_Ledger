@@ -302,6 +302,40 @@ _LEDGER_COLS = [1.5, 2.3, 1.8, 3.0, 1.35, 1.45]
 _LEDGER_HEADS = ["Date", "Amount", "Ledger", "Note", "", ""]
 
 
+def attachment_is_stored(reference: str) -> bool:
+    from ledger import attach
+
+    return attach.is_stored(reference)
+
+
+def attachment_button(reference: str, key: str) -> None:
+    """Offer a stored attachment for download.
+
+    Fetched only when asked for: reassembling every attachment on every page
+    load would make the list crawl once there are a few of them.
+    """
+    from ledger import attach
+
+    want = f"want_{key}"
+    if not st.session_state.get(want):
+        if st.button("📎 Get file", key=key, help="Fetch this attachment"):
+            st.session_state[want] = True
+            st.rerun()
+        return
+
+    stored = attach.get(reference)
+    if stored is None:
+        st.caption("📎 attachment missing")
+        return
+    st.download_button(
+        f"⬇ {stored.name}",
+        data=stored.data,
+        file_name=stored.name,
+        mime=stored.mimetype,
+        key=f"dl_{key}",
+    )
+
+
 def _head_row(labels: list[str], widths: list[float]) -> None:
     cells = st.columns(widths, vertical_alignment="bottom")
     for cell, text in zip(cells, labels):
@@ -343,14 +377,18 @@ def entry_table(entries: list, scope: str, *, empty: str = "Nothing here yet.") 
         )
         book.markdown(f'<div class="khata-cell">{entry.ledger}</div>', unsafe_allow_html=True)
         mark = _SOURCE_MARK.get(entry.source, "")
-        link = (f' · <a href="{entry.attachment}" target="_blank">📎</a>'
-                if entry.attachment else "")
-        note.markdown(
-            f'<div class="khata-cell khata-meta">{entry.note or "—"}'
-            + (f' <span class="khata-src">{mark}</span>' if mark else "")
-            + link + "</div>",
-            unsafe_allow_html=True,
-        )
+        link = ""
+        if entry.attachment and not attachment_is_stored(entry.attachment):
+            link = f' · <a href="{entry.attachment}" target="_blank">📎 link</a>'
+        with note:
+            st.markdown(
+                f'<div class="khata-cell khata-meta">{entry.note or "—"}'
+                + (f' <span class="khata-src">{mark}</span>' if mark else "")
+                + link + "</div>",
+                unsafe_allow_html=True,
+            )
+            if entry.attachment and attachment_is_stored(entry.attachment):
+                attachment_button(entry.attachment, key=f"att_{scope}_{entry.row}")
         with edit:
             edit_control(entry, scope, [], [])
         with remove:

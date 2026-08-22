@@ -7,7 +7,7 @@ from datetime import date
 
 import streamlit as st
 
-from ledger import store
+from ledger import attach, store
 from ledger.models import BY_HAND, Direction, Entry, EntryError
 from ledger.money import Currency, format_money, spoken, to_minor
 from ledger.ui import clear_cache, demo_banner, entry_table, load_ledger, styles
@@ -86,7 +86,11 @@ note = st.text_input("Note", placeholder="UPI, cash, cheque…")
 statement = st.file_uploader(
     "Bank statement or receipt (optional)",
     type=["pdf", "png", "jpg", "jpeg", "webp"],
-    help="Uploaded to your Drive folder and linked from the entry.",
+    help=(
+        f"Kept inside the spreadsheet, up to {attach.MAX_BYTES // 1024} KB. "
+        "Google does not allow this app to write to your Drive, so a link you "
+        "paste yourself works too — put it in the entry's Edit box."
+    ),
 )
 
 # Validate before offering to save, so the preview is the thing that gets saved.
@@ -142,8 +146,8 @@ if st.button("Save entry", type="primary", disabled=not ready):
         if statement is not None:
             # Upload first: a saved row pointing at a file that never arrived
             # would be worse than failing before anything is written.
-            with st.spinner(f"Uploading {statement.name}…"):
-                link = store.upload_attachment(
+            with st.spinner(f"Storing {statement.name}…"):
+                link = attach.put(
                     statement.name,
                     statement.getvalue(),
                     statement.type or "application/octet-stream",
