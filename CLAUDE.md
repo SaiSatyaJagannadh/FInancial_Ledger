@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~390)
+.venv/bin/python -m pytest -q                     # all tests (~415)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -66,6 +66,38 @@ mutate a stranger's record.
 The amount in that check is compared **numerically, not as text**: Sheets
 returns `42` for what was written as `42.00`, so a string comparison passes
 against a test fake and fails against the real sheet.
+
+### Google's 503s
+
+Sheets answers a perfectly good request with `[503]: The service is currently
+unavailable` at random. It says nothing about the sheet, the key or the data,
+and the same call succeeds a second later.
+
+`store._retrying_http_client()` subclasses gspread's `HTTPClient` and retries
+inside `request`. **Every read and write in the app — ledger, spending,
+attachments — goes out through that one method**, so this is the only place
+retrying belongs; do not add it at a call site. 408/429/5xx are retried,
+4xx never (a revoked key will not pass on the fourth try). A dropped
+connection is retried **only for GET**: the reply to a lost POST may already
+have been applied, and repeating it would append the entry twice.
+
+Waits are `(0.4, 1.0, 2.5)` — four attempts, under four seconds. gspread ships
+its own `BackOffHTTPClient`; it is not used because it starts at two seconds
+and doubles to 128, which nobody watching a web page will sit through.
+
+`store._client()` caches the authorised client per service account. Building
+one exchanges the key for an OAuth token over the network, and doing that per
+operation added a call, and so another chance of a 503, to every read.
+
+**An unreachable sheet shows nothing, never demo data.** Sample entries under
+a heading that says "your ledger" carry other people's names and figures;
+there is no way to read that screen which is true. `LoadResult.unreachable`
+says so, `ui.demo_banner` renders the reason with a Try again button and
+calls `st.stop()`, and `ui.load_ledger` drops the failure from the cache so
+the next view retries instead of repeating a stale error for a minute.
+`store._status_of` digs the HTTP status out however gspread wrapped it —
+`APIError.code`, a `SpreadsheetNotFound` holding a raw response, or a bare
+builtin `PermissionError` for 403.
 
 ### The assistant (`ledger/assistant.py`)
 

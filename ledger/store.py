@@ -7,6 +7,7 @@ wire up a sheet.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from ledger.demo import build_demo_entries
@@ -34,6 +35,9 @@ class LoadResult:
     #: Rows the sheet contained that could not be read, as human messages.
     problems: list[str]
     detail: str = ""
+    #: Set when the sheet is configured but did not answer. Distinct from
+    #: `demo`, which means there is no sheet to reach in the first place.
+    unreachable: bool = False
 
 
 def rows_to_entries(rows: list[dict]) -> tuple[list[Entry], list[str]]:
@@ -75,6 +79,82 @@ def is_configured(secrets: dict | None = None) -> bool:
     return bool(account) and bool(sheet.get("url") or sheet.get("id"))
 
 
+#: Google answers a perfectly good request with one of these when its own side
+#: is busy. "[503]: The service is currently unavailable" is the common one, and
+#: it says nothing about the sheet or the credentials — the same call succeeds a
+#: second later. Retried rather than surfaced.
+RETRY_CODES = frozenset({408, 429, 500, 502, 503, 504})
+
+#: Three waits, so four attempts in all. Long enough to ride out a blip, short
+#: enough that a page load which is going to fail fails within four seconds
+#: instead of hanging. gspread ships its own BackOffHTTPClient, but it starts at
+#: two seconds and doubles to 128 — a wait no one watching a web page will sit
+#: through.
+RETRY_WAITS = (0.4, 1.0, 2.5)
+
+_CLIENTS: dict = {}
+_RETRYING_CLIENT = None
+
+
+def _retrying_http_client():
+    """gspread's HTTP client, with transient Google failures retried.
+
+    Every read and write this app makes — ledger, spending, attachments — goes
+    out through one `HTTPClient.request`. Retrying there covers all of them at
+    once, and means no call site has to remember to ask for it.
+    """
+    global _RETRYING_CLIENT
+    if _RETRYING_CLIENT is not None:
+        return _RETRYING_CLIENT
+
+    import requests
+    from gspread.exceptions import APIError
+    from gspread.http_client import HTTPClient
+
+    class _Retrying(HTTPClient):
+        def request(self, method, endpoint, *args, **kwargs):
+            for wait in RETRY_WAITS:
+                try:
+                    return super().request(method, endpoint, *args, **kwargs)
+                except APIError as exc:
+                    if exc.code not in RETRY_CODES:
+                        raise          # a 404 or a revoked key will never pass
+                except (requests.ConnectionError, requests.Timeout):
+                    # The reply was lost, so we cannot know whether the write
+                    # landed; repeating it could append the same row twice. A
+                    # 5xx above is different — the API said it did not act.
+                    if method.upper() not in ("GET", "HEAD"):
+                        raise
+                time.sleep(wait)
+            # The last attempt is not wrapped: whatever it raises is the real
+            # answer, and by now it has earned its way to the page.
+            return super().request(method, endpoint, *args, **kwargs)
+
+    _RETRYING_CLIENT = _Retrying
+    return _RETRYING_CLIENT
+
+
+def _client(account: dict):
+    """An authorised gspread client, reused across calls.
+
+    Building one exchanges the service-account key for an OAuth token, which is
+    a network round trip of its own. Doing that afresh for every read added a
+    call — and so another chance of a 503 — to every single operation.
+    """
+    import gspread
+    from google.oauth2.service_account import Credentials
+
+    cached = _CLIENTS.get(account.get("client_email"))
+    if cached is not None:
+        return cached
+    client = gspread.authorize(
+        Credentials.from_service_account_info(account, scopes=SCOPES),
+        http_client=_retrying_http_client(),
+    )
+    _CLIENTS[account.get("client_email")] = client
+    return client
+
+
 def _open_worksheet(secrets: dict, tab: str | None = None):
     """One tab of the workbook. `tab` overrides the configured default.
 
@@ -82,13 +162,11 @@ def _open_worksheet(secrets: dict, tab: str | None = None):
     once something has been written to it, and a first-run crash is not a
     useful way to learn that.
     """
-    import gspread
-    from google.oauth2.service_account import Credentials
+    from gspread.exceptions import WorksheetNotFound
 
     account = dict(secrets["gcp_service_account"])
     sheet = dict(secrets["sheet"])
-    credentials = Credentials.from_service_account_info(account, scopes=SCOPES)
-    client = gspread.authorize(credentials)
+    client = _client(account)
 
     book = client.open_by_url(sheet["url"]) if sheet.get("url") else client.open_by_key(sheet["id"])
     name = tab or sheet.get("worksheet")
@@ -96,12 +174,19 @@ def _open_worksheet(secrets: dict, tab: str | None = None):
         return book.sheet1
     try:
         return book.worksheet(name)
-    except Exception:
+    except WorksheetNotFound:
+        # Only an absent tab is worth creating. Catching everything here meant
+        # a 503 on the lookup was answered by adding a second tab of the same
+        # name — a transient failure turning into a split ledger.
         return book.add_worksheet(title=name, rows=200, cols=20)
 
 
 def load(secrets: dict | None = None) -> LoadResult:
-    """Load every entry. Falls back to demo data when unconfigured or unreachable."""
+    """Load every entry.
+
+    Demo data when there is no sheet configured; nothing at all when there is
+    one but it cannot be reached.
+    """
     secrets = _secrets() if secrets is None else secrets
 
     if not is_configured(secrets):
@@ -111,17 +196,57 @@ def load(secrets: dict | None = None) -> LoadResult:
         worksheet = _open_worksheet(secrets)
         records = worksheet.get_all_records()
     except Exception as exc:
-        # A network blip or a revoked key should not present an empty ledger,
-        # which would read as "nobody owes you anything".
-        return LoadResult(
-            build_demo_entries(),
-            demo=True,
-            problems=[],
-            detail=f"Could not reach the sheet ({type(exc).__name__}: {exc}). Showing demo data.",
-        )
+        # Not demo data. Sample entries under a heading that says "your ledger"
+        # are worse than nothing: they carry names and figures that are not
+        # yours, and there is no reading of them that is true. Say the sheet is
+        # unreachable and show nothing.
+        return LoadResult([], demo=False, problems=[], detail=_why(exc), unreachable=True)
 
     entries, problems = rows_to_entries(records)
     return LoadResult(entries, demo=False, problems=problems)
+
+
+def _status_of(exc: Exception) -> int | None:
+    """The HTTP status behind a gspread failure, however it was wrapped.
+
+    gspread does not report these consistently: an APIError carries `.code`,
+    but a 404 is re-raised as SpreadsheetNotFound holding the raw response in
+    its args, and a 403 becomes a bare builtin PermissionError with nothing at
+    all. Reading only `.code` left the page showing
+    "SpreadsheetNotFound: <Response [404]>", which tells nobody anything.
+    """
+    code = getattr(exc, "code", None)
+    if isinstance(code, int):
+        return code
+    for candidate in (getattr(exc, "response", None), *getattr(exc, "args", ())):
+        status = getattr(candidate, "status_code", None)
+        if isinstance(status, int):
+            return status
+    if isinstance(exc, PermissionError):
+        return 403
+    return None
+
+
+def _why(exc: Exception) -> str:
+    """The failure in words worth reading, not a class name and a stack."""
+    code = _status_of(exc)
+    if code in RETRY_CODES:
+        return (
+            f"Google Sheets answered {code} on all {len(RETRY_WAITS) + 1} attempts. "
+            "That is Google's own service, not your sheet and not your data — it "
+            "usually clears within a minute."
+        )
+    if code in (401, 403):
+        return (
+            f"Google refused access ({code}). The service account may have lost its "
+            "share on the sheet, or the key may have been revoked."
+        )
+    if code == 404:
+        return (
+            "Google cannot find that sheet. Check the sheet id or URL in your "
+            "secrets, and that the sheet is still shared with the service account."
+        )
+    return f"{type(exc).__name__}: {exc}"
 
 
 def append(entry: Entry, secrets: dict | None = None) -> None:

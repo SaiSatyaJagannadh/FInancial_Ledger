@@ -37,17 +37,31 @@ def test_load_without_credentials_is_demo_mode():
     assert totals(by_currency(result.entries, Currency.INR)).records == 32
 
 
-def test_load_falls_back_to_demo_when_the_sheet_is_unreachable(monkeypatch):
-    """An expired key must not render as 'nobody owes you anything'."""
+def test_an_unreachable_sheet_shows_nothing_rather_than_demo_data(monkeypatch):
+    """Sample entries under your own name are worse than a blank page.
+
+    They carry other people's names and other people's figures, and there is
+    no way to read them that is true. The page says the sheet is unreachable
+    and shows nothing instead.
+    """
 
     def boom(_secrets):
         raise ConnectionError("token expired")
 
     monkeypatch.setattr(store, "_open_worksheet", boom)
     result = store.load(secrets=CONFIGURED)
+    assert result.unreachable is True
+    assert result.demo is False
+    assert result.entries == []
+    assert "ConnectionError" in result.detail
+
+
+def test_unconfigured_is_demo_mode_and_not_an_error():
+    """No sheet at all is a supported way to run, not a failure."""
+    result = store.load(secrets={})
     assert result.demo is True
-    assert "Could not reach the sheet" in result.detail
-    assert result.entries  # still shows something rather than an empty page
+    assert result.unreachable is False
+    assert result.entries
 
 
 def test_load_reads_rows_from_the_sheet(monkeypatch):

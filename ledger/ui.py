@@ -43,7 +43,13 @@ def _cached_load() -> store.LoadResult:
 
 
 def load_ledger() -> store.LoadResult:
-    return _cached_load()
+    result = _cached_load()
+    if result.unreachable:
+        # Never keep a failure for the full minute. Google's 503s clear in
+        # seconds, and a cached one would make every page for the next minute
+        # repeat an error that had already stopped being true.
+        _cached_load.clear()
+    return result
 
 
 def clear_cache() -> None:
@@ -101,7 +107,25 @@ def api_key() -> str:
 
 
 def demo_banner(result: store.LoadResult) -> None:
-    """Say plainly which data is on screen. Silence here would be misleading."""
+    """Say plainly which data is on screen. Silence here would be misleading.
+
+    Stops the page when the sheet is unreachable. Every view calls this
+    immediately after loading, so one guard here spares eight pages from each
+    having to work out what to render with no data.
+    """
+    if result.unreachable:
+        st.error(f"**Google Sheets did not answer** — {result.detail}")
+        again, _ = st.columns([1, 3])
+        if again.button("Try again", type="primary", width="stretch"):
+            clear_cache()
+            st.rerun()
+        st.caption(
+            "Your entries are untouched in the sheet. Nothing is shown here "
+            "because sample figures under your own name would be worse than a "
+            "blank page."
+        )
+        st.stop()
+
     if not result.demo:
         if result.problems:
             with st.expander(f"⚠️ {len(result.problems)} row(s) could not be read"):
@@ -109,14 +133,11 @@ def demo_banner(result: store.LoadResult) -> None:
                     st.write(f"- {problem}")
         return
 
-    if result.detail:
-        st.error(f"**Sheet unavailable** — {result.detail}")
-    else:
-        st.warning(
-            "**Demo mode** — showing sample data. Add your credentials to "
-            "`.streamlit/secrets.toml` to connect your real Google Sheet.",
-            icon="⚠️",
-        )
+    st.warning(
+        "**Demo mode** — showing sample data. Add your credentials to "
+        "`.streamlit/secrets.toml` to connect your real Google Sheet.",
+        icon="⚠️",
+    )
 
 
 def page_config(title: str) -> None:
