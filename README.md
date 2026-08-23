@@ -30,10 +30,13 @@ connect a sheet.
 The sheet needs one header row:
 
 ```
-date | person | ledger | direction | amount | currency | note
+date | person | ledger | direction | amount | currency | note | attachment | source
 ```
 
-An empty sheet gets that header written the first time you save.
+An empty sheet gets that header written the first time you save. `attachment`
+and `source` are filled in by the app — where an uploaded file lives, and
+whether the row was typed, dictated to the assistant, or read out of a
+document.
 
 ## Two currencies, never mixed
 
@@ -88,26 +91,71 @@ Real sheets are filled in by hand, so reads tolerate:
 - currency written `INR`, `usd`, `₹`, `$`, `Rs` — or left blank, meaning rupees
 
 A row that still cannot be read is reported **by row number** rather than taking
-the rest of the sheet down with it. If the sheet is unreachable the app shows
-demo data and says so, because an empty page would read as "nobody owes you
-anything".
+the rest of the sheet down with it.
+
+Google answers a perfectly good request with `503 Service Unavailable` often
+enough to matter, so every call is retried — four attempts inside four seconds,
+and never on a 4xx, which will not pass on the fourth try either. A dropped
+connection is retried only for a read: the reply to a lost write may already
+have been applied, and sending it again would append the same entry twice.
+
+If the sheet is still unreachable after that, the app says so and shows
+**nothing**. It does not fall back to sample data — figures under a heading
+that says "your ledger" would carry other people's names and other people's
+amounts, and there is no way to read that screen which is true.
+
+## The pages
+
+| Page | What it is for |
+|---|---|
+| **Ledger** | Totals, per-person balances, and a drill-down into anyone's entries |
+| **Add entry** | The form. Clears itself after a save, ready for the next one |
+| **Edit entries** | Find a row by person, ledger, year or free text, then change or remove it |
+| **Assistant** | Say what happened, or upload a statement, and approve what it drafts |
+| **Spending** / **Add spending** | General expenses, deliberately kept out of the lending totals |
+| **Invested instead** | What the outstanding money would have earned in an FD |
+| **Download** | Excel, PDF, or a summary to send by WhatsApp or email |
 
 ## Layout
 
 ```
-app.py                  dashboard
-pages/1_Add_Entry.py    entry form
+app.py            router only — st.set_page_config lives here and nowhere else
+views/            one file per page, listed above
 ledger/
-  money.py              paise <-> ₹, Indian grouping
-  models.py             Entry, validation, direction
-  compute.py            every aggregate the UI shows
-  store.py              Sheets read/append + demo fallback
-  demo.py               deterministic sample data
-  ui.py                 shared Streamlit pieces
+  money.py        paise <-> ₹, Indian grouping, lakh/crore
+  models.py       Entry, validation, direction
+  compute.py      every aggregate the UI shows
+  store.py        the entries tab: read, append, edit, delete, retries
+  spend.py        the transactions tab
+  attach.py       the attachments tab — files, base64, across cells
+  assistant.py    NVIDIA endpoint; drafts entries, never writes them
+  docs.py         an upload turned into text or a right-sized image
+  invest.py       compounding, for "invested instead"
+  settle.py       clearing a balance to zero
+  export.py       xlsx, PDF, shareable summary
+  demo.py         deterministic sample data
+  ui.py           shared Streamlit pieces
 ```
 
 `compute.py` holds all the arithmetic; the UI formats but never sums, so the
-tests cover exactly what is on screen.
+tests cover exactly what is on screen. `invest.py` and `settle.py` follow the
+same rule.
+
+## Where things are stored
+
+One Google Sheets workbook is the whole database — three tabs, no SQL:
+
+| Tab | Holds |
+|---|---|
+| `entries` | The lending ledger |
+| `transactions` | General spending, never summed into the ledger |
+| `attachments` | Uploaded files, base64 across cells |
+
+Attachments live in the sheet rather than Drive because a service account has
+no Drive storage quota of its own, and sharing a folder with it does not help —
+the file would be owned by the account. Google's answer is a Shared Drive or
+OAuth delegation, both of which need paid Workspace. That is a wall, not a
+missing setting.
 
 ## Tests
 
@@ -115,7 +163,15 @@ tests cover exactly what is on screen.
 .venv/bin/python -m pytest
 ```
 
-128 tests: money parsing and Indian formatting, entry validation, the
-aggregates, filter consistency, messy-sheet tolerance, and an end-to-end
-load → append → reload over an in-memory sheet — plus the currency split: a
-dollar entry never moves a rupee total, and a mixed total raises.
+414 tests: money parsing and Indian formatting, entry validation, the
+aggregates, filter consistency, messy-sheet tolerance, HTML escaping, the
+retry and its idempotency guard, compounding and settlement arithmetic, and an
+end-to-end load → append → reload over an in-memory sheet — plus the currency
+split: a dollar entry never moves a rupee total, and a mixed total raises.
+
+Several modules also carry a `demo()` self-check for the behaviour that is
+awkward to unit-test — file round-trips, compounding, JSON parsing:
+
+```bash
+.venv/bin/python -m ledger.invest
+```

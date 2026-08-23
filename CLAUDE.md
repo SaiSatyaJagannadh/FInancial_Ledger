@@ -163,5 +163,8 @@ rather than pretending.
 - PDF exports print `INR`/`USD` rather than `₹` — fpdf's core fonts are
   latin-1 and the glyph raises.
 - NVIDIA's endpoint has no speech-to-text, so there is no voice input.
-- `README.md`'s Layout and test-count sections are stale (they predate
-  `views/` and the extra modules).
+- The repo is public and indexed at
+  [deepwiki.com/SaiSatyaJagannadh/FInancial_Ledger](https://deepwiki.com/SaiSatyaJagannadh/FInancial_Ledger),
+  which regenerates from `README.md` and this file on a push. A stale claim in
+  either becomes a stale claim in a public wiki, so correct them in the same
+  commit as the behaviour they describe.
