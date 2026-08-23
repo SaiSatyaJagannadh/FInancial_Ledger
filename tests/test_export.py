@@ -123,3 +123,59 @@ def test_rows_come_out_in_date_order():
     assert [r[0] for r in _rows(entries)] == [
         date(2026, 1, 1), date(2026, 3, 1), date(2026, 5, 1)
     ]
+
+
+# --------------------------------------------------- what the fonts can draw
+
+class TestPdfSurvivesRealText:
+    """The Download page crashed on the deployed app with
+    `FPDFUnicodeEncodingException`. fpdf's core fonts are latin-1, and only
+    `_money` was guarded — so a rupee sign in an *amount* was safe while the
+    same sign in a *note* took the whole page down. Names, ledgers and notes
+    are free text typed by a person or written by a model out of a document.
+    """
+
+    @pytest.mark.parametrize("text", [
+        "gave ₹5,000 → for fees",       # the assistant writes both of these
+        "📄 statement “Aug” — ok",       # emoji and curly quotes from a PDF
+        "విహార్",                        # a name in Telugu
+        "Ṡrī",                          # decomposable Latin
+        "café • naïve",                 # latin-1 already, must survive intact
+        "rent 1st–5th",                 # en dash
+    ])
+    def test_a_pdf_is_produced_whatever_the_text(self, text):
+        from ledger.export import to_pdf as build
+
+        pdf = build([entry(100_00, person=text, ledger=text, note=text)])
+        assert pdf[:5] == b"%PDF-"
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("₹5,000", "INR 5,000"),
+        ("a → b", "a -> b"),
+        ("“quoted”", '"quoted"'),
+        ("it’s", "it's"),
+        ("one—two", "one-two"),
+        ("Ṡrī", "Sri"),
+    ])
+    def test_the_stand_ins_are_readable_not_question_marks(self, raw, expected):
+        from ledger.export import _latin1
+
+        assert _latin1(raw) == expected
+
+    def test_latin1_text_is_left_exactly_alone(self):
+        from ledger.export import _latin1
+
+        assert _latin1("café naïve Zoë") == "café naïve Zoë"
+
+    def test_everything_returned_can_actually_be_encoded(self):
+        """The one property that matters: whatever comes out, fpdf can draw."""
+        from ledger.export import _latin1
+
+        for text in ["విహార్", "📄🎉", "日本語", "", None, "₹→“”"]:
+            _latin1(text).encode("latin-1")
+
+    def test_a_note_with_a_rupee_sign_no_longer_crashes(self):
+        """The exact shape reported from the deployed app."""
+        from ledger.export import to_pdf as build
+
+        assert build([entry(500_00, note="paid ₹500 → cleared")])[:5] == b"%PDF-"

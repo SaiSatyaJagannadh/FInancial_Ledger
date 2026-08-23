@@ -141,6 +141,46 @@ def _money(minor: int, currency: Currency) -> str:
     return f"{PDF_SYMBOLS[currency]} {sign}{whole:,}.{frac:02d}"
 
 
+#: What the core fonts cannot draw, and what to draw instead. Arrows and
+#: curly quotes arrive from notes the assistant wrote out of a PDF; the rupee
+#: sign arrives from anywhere at all.
+_PDF_SUBSTITUTES = {
+    "\u20b9": "INR ", "\u2192": "->", "\u2190": "<-", "\u2194": "<->",
+    "\u2014": "-", "\u2013": "-", "\u2212": "-",
+    "\u2018": "'", "\u2019": "'", "\u201a": ",",
+    "\u201c": '"', "\u201d": '"', "\u2026": "...",
+    "\u00a0": " ", "\u2022": "-", "\u00b7": "-", "\u20ac": "EUR ",
+    "\u00a3": "GBP ", "\u2705": "", "\u26a0": "!",
+}
+
+
+def _latin1(value) -> str:
+    """Text fpdf's core fonts can actually draw.
+
+    fpdf ships latin-1 core fonts, and hands any other character straight to
+    `FPDFUnicodeEncodingException` — which took the whole Download page down
+    rather than losing one glyph. Only `_money` was guarded, so a rupee sign
+    in an amount was safe while the same sign in a *note* was not, and names,
+    ledgers and notes are all free text a person or a model typed.
+
+    Anything outside latin-1 that has no sensible stand-in is dropped, because
+    a statement missing one character is worth more than no statement at all.
+    """
+    import unicodedata
+
+    text = str(value if value is not None else "")
+    for bad, good in _PDF_SUBSTITUTES.items():
+        text = text.replace(bad, good)
+    # Strip accents that latin-1 cannot hold rather than turning the whole
+    # word into question marks: "Ṡrī" reads better as "Sri" than "???".
+    if any(ord(ch) > 255 for ch in text):
+        text = "".join(
+            ch for ch in unicodedata.normalize("NFKD", text)
+            if not unicodedata.combining(ch)
+        )
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
 def to_pdf(entries: list[Entry], *, today: date | None = None) -> bytes:
     """A statement you could hand to someone: totals, then every entry."""
     from fpdf import FPDF
@@ -170,13 +210,15 @@ def to_pdf(entries: list[Entry], *, today: date | None = None) -> bytes:
 
         overall = totals(subset, currency)
         pdf.set_font("Helvetica", "B", 13)
-        pdf.cell(0, 9, currency.label, new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 9, _latin1(currency.label), new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica", "", 10)
         pdf.cell(
             0, 6,
-            f"Given {_money(overall.given_minor, currency)}    "
-            f"Received {_money(overall.received_minor, currency)}    "
-            f"Net outstanding {_money(overall.net_minor, currency)}",
+            _latin1(
+                f"Given {_money(overall.given_minor, currency)}    "
+                f"Received {_money(overall.received_minor, currency)}    "
+                f"Net outstanding {_money(overall.net_minor, currency)}"
+            ),
             new_x="LMARGIN", new_y="NEXT",
         )
         pdf.ln(2)
@@ -189,7 +231,7 @@ def to_pdf(entries: list[Entry], *, today: date | None = None) -> bytes:
             ["Date", "Person", "Ledger", "Direction", "Amount", "Note", "Attachment"],
             widths,
         ):
-            pdf.cell(width, 8, heading, border=0, fill=True)
+            pdf.cell(width, 8, _latin1(heading), border=0, fill=True)
         pdf.ln()
         pdf.set_text_color(0, 0, 0)
 
@@ -214,12 +256,12 @@ def to_pdf(entries: list[Entry], *, today: date | None = None) -> bytes:
                 mark,
             ]
             for text, width in zip(cells, widths):
-                pdf.cell(width, 7, text, border=0, fill=fill)
+                pdf.cell(width, 7, _latin1(text), border=0, fill=fill)
             pdf.ln()
 
         pdf.ln(4)
         pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(0, 7, f"Still owed: {_money(overall.net_minor, currency)}",
+        pdf.cell(0, 7, _latin1(f"Still owed: {_money(overall.net_minor, currency)}"),
                  new_x="LMARGIN", new_y="NEXT")
         pdf.ln(6)
 

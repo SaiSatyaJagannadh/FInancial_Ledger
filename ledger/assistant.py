@@ -13,10 +13,10 @@ from __future__ import annotations
 import base64
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dc_field
 from datetime import date
 
-from ledger.models import COLUMNS, Entry, EntryError
+from ledger.models import BY_CHAT, COLUMNS, Entry, EntryError
 
 BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
@@ -37,6 +37,19 @@ When you are confident, propose entries:
 When anything essential is missing or ambiguous, ASK INSTEAD:
 {"question": "one short question"}
 
+When the user is recording INTEREST — "add 2000 interest for Chaitu for
+August", "charge Vihar 1.5% this month" — propose a charge instead. Interest
+is NOT a ledger entry and never becomes one:
+{"interest": [{"date": "YYYY-MM-DD", "person": "...", "amount": "1234.56",
+"currency": "INR" | "USD", "rate_percent": "2", "note": "..."}]}
+Use the first day of the month being charged for. Leave rate_percent empty if
+the user gave a flat amount rather than a rate.
+
+When the user is GROUPING people — "Chaitu and Sirisha come under Vihar",
+"put Krishna under Nanna" — propose that instead:
+{"grouping": [{"person": "...", "under": "..."}]}
+Use "under": "" to put somebody back on their own.
+
 When the user is ASKING ABOUT the ledger rather than recording something —
 "how much does Ravi owe me", "what did I give this year", "give me a brief" —
 answer from the figures in the summary below:
@@ -46,6 +59,8 @@ that is not in the summary, and never invent a person who is not listed.
 
 Rules:
 - "given" = the user handed money out. "received" = money came back to them.
+- Interest goes in "interest", never in "entries". Money handed over is a
+  ledger entry; interest on it is not, and mixing them corrupts both.
 - amount is always POSITIVE. Direction carries the sign.
 - If a date is not stated, use today's date.
 - If the currency is not stated, use INR.
@@ -74,6 +89,15 @@ class Reply:
     rejected: list[str]
     question: str = ""
     answer: str = ""
+    #: Proposed interest charges. Kept apart from `drafts` so nothing can save
+    #: one into the ledger by reaching for the wrong list.
+    charges: list = dc_field(default_factory=list)
+    #: Proposed groupings, as (person, under) pairs.
+    groupings: list = dc_field(default_factory=list)
+
+    @property
+    def anything(self) -> bool:
+        return bool(self.drafts or self.charges or self.groupings)
 
     def __iter__(self):
         """Unpack as (drafts, rejected) so older call sites keep working."""
@@ -92,12 +116,16 @@ class AssistantError(RuntimeError):
     """The model could not be reached, or gave nothing usable."""
 
 
-def summarise(entries: list) -> str:
+def summarise(entries: list, charges: list | None = None,
+              parents: dict | None = None) -> str:
     """The ledger as a few lines of plain figures, for answering questions.
 
     Computed here rather than left to the model: a total it works out itself is
     a total that can be wrong, and being confidently wrong about money is the
     one thing this must not do.
+
+    Interest and groupings are listed separately and labelled as such, so the
+    model can answer about them without ever adding them into a ledger total.
     """
     if not entries:
         return "The ledger is empty."
@@ -125,6 +153,32 @@ def summarise(entries: list) -> str:
                 f"received {format_money(summary.received_minor, currency)}), "
                 f"last activity {summary.last_activity:%d %b %Y}."
             )
+
+    if charges:
+        from ledger.interest import by_person as interest_by_person
+        from ledger.interest import totals as interest_totals
+
+        lines.append("")
+        lines.append("INTEREST — charged separately, NOT part of any figure above:")
+        for currency in Currency:
+            total = interest_totals(charges, currency)
+            if not total:
+                continue
+            lines.append(f"  {currency.label}: {format_money(total, currency)} in total.")
+            for row in interest_by_person(charges, currency):
+                lines.append(
+                    f"    - {row['person']}: "
+                    f"{format_money(row['total_minor'], currency)} "
+                    f"over {row['months']} month(s)."
+                )
+
+    if parents:
+        lines.append("")
+        lines.append("GROUPS — these people's totals roll up to somebody else:")
+        for person, under in sorted(parents.items()):
+            if under:
+                lines.append(f"  - {person} comes under {under}.")
+
     return "\n".join(lines)
 
 
@@ -274,6 +328,61 @@ def _extract_json(text: str) -> dict:
         raise AssistantError(f"Reply was not valid JSON: {exc}") from exc
 
 
+def _to_charges(raw_rows, people: list[str] | None, said: str = ""):
+    """Model rows -> interest charges, through `Charge.from_row`.
+
+    The same door a sheet row goes through. A misread "5,000" as "50,000" has
+    to be stopped somewhere that is tested, and the prompt is not that place.
+    """
+    from ledger.interest import COLUMNS as CHARGE_COLUMNS, Charge
+
+    charges, problems = [], []
+    for raw in raw_rows or []:
+        if not isinstance(raw, dict):
+            problems.append(f"not an object: {raw!r}")
+            continue
+        row = {key: str(raw.get(key, "") or "") for key in CHARGE_COLUMNS}
+        row["person"] = canonical(row["person"], people or [])
+        stated = currency_hint(said)
+        if stated is not None:
+            row["currency"] = stated.value
+        row["source"] = BY_CHAT
+        try:
+            charges.append(Charge.from_row(row))
+        except EntryError as exc:
+            problems.append(f"interest for {raw.get('person') or 'someone'}: {exc}")
+    return charges, problems
+
+
+def _to_groupings(raw_rows, people: list[str] | None):
+    """Model rows -> (person, under) pairs, with both names snapped to real ones.
+
+    A grouping onto a name that does not exist would quietly create a group of
+    one that never matches anybody, so an unknown parent is refused here.
+    """
+    known = people or []
+    pairs, problems = [], []
+    for raw in raw_rows or []:
+        if not isinstance(raw, dict):
+            problems.append(f"not an object: {raw!r}")
+            continue
+        person = canonical(str(raw.get("person") or "").strip(), known)
+        under = canonical(str(raw.get("under") or "").strip(), known)
+        if not person:
+            problems.append("a grouping with no person")
+            continue
+        if person == under:
+            problems.append(f"{person} cannot be grouped under themselves")
+            continue
+        if under and known and under not in known:
+            problems.append(
+                f"{under} is not somebody in the ledger, so {person} was left alone"
+            )
+            continue
+        pairs.append((person, under))
+    return pairs, problems
+
+
 def _to_reply(
     payload: dict,
     people: list[str] | None = None,
@@ -284,13 +393,24 @@ def _to_reply(
     """Validate the model's rows through the same door a sheet row goes through."""
     question = str(payload.get("question") or "").strip()
     answer = str(payload.get("answer") or "").strip()
+
+    # Interest and groupings are validated through the same doors their own
+    # modules use, so a model that miscounts a zero is stopped in exactly the
+    # place a bad sheet row would be.
+    charges, charge_problems = _to_charges(payload.get("interest"), people, said)
+    groupings, group_problems = _to_groupings(payload.get("grouping"), people)
+    other = charge_problems + group_problems
+
+    if charges or groupings:
+        return Reply([], other, question=question if not (charges or groupings) else "",
+                     charges=charges, groupings=groupings)
     if answer and not payload.get("entries"):
-        return Reply([], [], answer=answer)
+        return Reply([], other, answer=answer)
     if question and not payload.get("entries"):
-        return Reply([], [], question=question)
+        return Reply([], other, question=question)
 
     drafts: list[Draft] = []
-    rejected: list[str] = []
+    rejected: list[str] = list(other)
     for raw in payload.get("entries") or []:
         if not isinstance(raw, dict):
             rejected.append(f"not an object: {raw!r}")

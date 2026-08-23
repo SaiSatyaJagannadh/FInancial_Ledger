@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ledger import docs, facts, store
+from ledger import docs, facts, interest, people as grouping, store
 from dataclasses import replace
 
 from ledger.assistant import read_image, read_note, summarise
@@ -54,6 +54,12 @@ if not key:
 people = sorted({e.person for e in result.entries})
 ledgers = sorted({e.ledger for e in result.entries})
 
+# Interest and groupings are loaded so the assistant can answer about them and
+# propose changes to them — never so it can add them to a ledger total.
+charges, _charge_problems = interest.load()
+members, _member_problems = grouping.load()
+parents = grouping.mapping(members)
+
 # Which ledgers each person actually keeps, so a proposed ledger can be snapped
 # to the real one instead of a new one named after them.
 person_ledgers: dict[str, list[str]] = {}
@@ -82,7 +88,14 @@ if "chat" not in st.session_state:
 def respond(reply, source: str, via: str = BY_CHAT) -> None:
     """Add one assistant turn: proposed entries, or a question back."""
     drafts, rejected = reply.drafts, reply.rejected
-    if reply.answer:
+    if reply.charges:
+        text = (f"That reads as **interest**, not a ledger entry, so it will be "
+                f"saved to the Interest page and stay out of your totals. "
+                f"Check the {'figure' if len(reply.charges) == 1 else 'figures'}, "
+                f"then save.")
+    elif reply.groupings:
+        text = "That reads as a **grouping**. Nothing moves in the ledger — only how the totals roll up."
+    elif reply.answer:
         text = reply.answer
     elif reply.question:
         text = reply.question
@@ -97,6 +110,7 @@ def respond(reply, source: str, via: str = BY_CHAT) -> None:
     st.session_state.chat.append({
         "role": "assistant", "text": text, "drafts": drafts,
         "rejected": rejected, "via": via,
+        "charges": list(reply.charges), "groupings": list(reply.groupings),
     })
 
 
@@ -161,7 +175,7 @@ with st.expander("📄  Read a statement, spreadsheet or photo"):
                                          "money out or was repaid.\n\n" + readable.text}],
                             api_key=key, people=people, ledgers=ledgers,
                             person_ledgers=person_ledgers,
-                            summary=summarise(result.entries),
+                            summary=summarise(result.entries, charges, parents),
                         )
                         via = BY_IMAGE
                     respond(reply, f"**{upload.name}**", via=via)
@@ -183,6 +197,74 @@ for index, turn in enumerate(st.session_state.chat):
 
         for problem in turn.get("rejected") or []:
             st.warning(f"Skipped — {problem}")
+
+        # Interest saves to its own tab. Kept in a separate list from `drafts`
+        # so no code path can reach for the wrong one and put a charge in the
+        # ledger — the thing this whole feature exists to prevent.
+        for slot, charge in enumerate(turn.get("charges") or []):
+            with st.container(border=True):
+                detail, save = st.columns([4, 1])
+                rate = f" · at {charge.rate_percent:g}%" if charge.rate_percent else ""
+                detail.markdown(
+                    f"**{charge.money()}** interest · **{charge.person}** · "
+                    f"{charge.month_label}{rate}"
+                    + (f"  \n_{charge.note}_" if charge.note else "")
+                )
+                detail.caption("Goes to the Interest page. Never added to the ledger.")
+                if save.button("Save", key=f"csave_{index}_{slot}", type="primary",
+                               width="stretch"):
+                    clash = interest.already_charged(
+                        charges, charge.person, charge.date, charge.currency
+                    )
+                    if clash:
+                        st.warning(
+                            f"{charge.person} already has {clash.money()} recorded "
+                            f"for {clash.month_label}. Remove that one first."
+                        )
+                    else:
+                        try:
+                            interest.add(charge)
+                        except Exception as exc:  # noqa: BLE001
+                            st.error(f"Could not save: {exc}")
+                        else:
+                            st.session_state.chat[index]["charges"] = [
+                                c for i, c in enumerate(turn["charges"]) if i != slot
+                            ]
+                            st.session_state.chat.append({
+                                "role": "assistant",
+                                "text": f"✅ Recorded {charge.money()} interest for "
+                                        f"**{charge.person}**, {charge.month_label}. "
+                                        "It is on the Interest page, not the ledger.",
+                                "drafts": [], "rejected": [],
+                            })
+                            st.rerun()
+
+        for slot, (person, under) in enumerate(turn.get("groupings") or []):
+            with st.container(border=True):
+                detail, save = st.columns([4, 1])
+                detail.markdown(
+                    f"**{person}** comes under **{under}**" if under
+                    else f"**{person}** goes back to being on their own"
+                )
+                detail.caption("Changes how totals roll up. No entry moves.")
+                if save.button("Apply", key=f"gsave_{index}_{slot}", type="primary",
+                               width="stretch"):
+                    try:
+                        grouping.set_parent(person, under)
+                    except Exception as exc:  # noqa: BLE001 — say what went wrong
+                        st.error(str(exc))
+                    else:
+                        st.session_state.chat[index]["groupings"] = [
+                            g for i, g in enumerate(turn["groupings"]) if i != slot
+                        ]
+                        st.session_state.chat.append({
+                            "role": "assistant",
+                            "text": (f"✅ **{person}** now comes under **{under}**."
+                                     if under else
+                                     f"✅ **{person}** is on their own again."),
+                            "drafts": [], "rejected": [],
+                        })
+                        st.rerun()
 
         # More than one entry from one document almost always belongs to the
         # same person and ledger. Ask once here rather than making it a fix on
@@ -324,7 +406,7 @@ def ask(text: str) -> None:
     try:
         reply = read_note(
             history(), api_key=key, people=people, ledgers=ledgers,
-            person_ledgers=person_ledgers, summary=summarise(result.entries),
+            person_ledgers=person_ledgers, summary=summarise(result.entries, charges, parents),
         )
     except Exception as exc:  # noqa: BLE001 — nothing may reach the page
         st.session_state.chat.append({
