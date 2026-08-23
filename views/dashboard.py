@@ -12,13 +12,14 @@ from ledger.compute import (
     ALL_TIME,
     PERIODS,
     by_currency,
+    by_group,
     by_person,
     filter_entries,
     ledger_breakdown,
     monthly_given,
     totals,
 )
-from ledger import settle, store
+from ledger import people as grouping, settle, store
 from ledger.models import Entry
 from ledger.money import Currency, compact, format_money
 from ledger.ui import clear_cache, demo_banner, entry_table, load_ledger, styles
@@ -96,6 +97,17 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
 
     everyone = sorted({e.person for e in entries})
 
+    # Grouped people are offered by their group, not one by one: picking Vihar
+    # has to bring Chaitu and Sirisha with him, because the arrangement is with
+    # Vihar and their separate rows are an implementation detail of it.
+    parents = grouping.mapping(grouping.load()[0])
+    families = grouping.groups(everyone, parents)
+    heads = sorted(families)
+
+    def label(head: str) -> str:
+        others = [n for n in families[head] if n != head]
+        return f"{head}  (+{len(others)})" if others else head
+
     left, middle, right = st.columns([2, 3, 1])
     with left:
         # All time, not a recent window: an unsettled debt from 2020 is still
@@ -104,9 +116,18 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
             "Period", list(PERIODS), index=list(PERIODS).index(ALL_TIME), key=f"{key}_period"
         )
     with middle:
-        people = st.multiselect("People", everyone, default=everyone, key=f"{key}_people")
+        # Nothing preselected: an empty filter already means everyone, and
+        # pre-filling it with every name made the box unreadable and gave no
+        # hint that it was a filter at all.
+        picked = st.multiselect(
+            "People", heads, format_func=label, key=f"{key}_people",
+            placeholder="Everyone",
+            help="Leave empty for everyone. Picking a group includes its people.",
+        )
 
-    shown = filter_entries(entries, period=period, people=people, currency=currency)
+    # A group expands to its members before filtering; empty still means all.
+    chosen = sorted({name for head in picked for name in families[head]})
+    shown = filter_entries(entries, period=period, people=chosen, currency=currency)
     summary = totals(shown, currency)
 
     with right:
@@ -155,25 +176,47 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
     table_col, chart_col = st.columns([1.35, 1], gap="large")
 
     with table_col:
-        st.subheader("Who owes me what")
+        grouped_rows = by_group(shown, currency, parents)
+        any_group = any(g.grouped for g in grouped_rows)
+        st.subheader("Who owes me what" if not any_group else "Who owes me what, by group")
         rows = by_person(shown, currency)
+
+        # One line per arrangement when groups exist, one per person when they
+        # do not — the same table either way, so nothing new to learn.
+        display = grouped_rows if any_group else [
+            type("Row", (), {
+                "head": r.person, "people": [r.person], "given_minor": r.given_minor,
+                "received_minor": r.received_minor, "net_minor": r.net_minor,
+                "last_activity": r.last_activity, "grouped": False,
+            })() for r in rows
+        ]
 
         st.dataframe(
             pd.DataFrame([
                 {
-                    "Person": r.person,
-                    "Given": r.given_minor / 100,
-                    "Received": r.received_minor / 100,
-                    "Net owed": r.net_minor / 100,
-                    "In short": compact(r.net_minor, currency) or "—",
-                    "Entries": sum(1 for e in shown if e.person == r.person),
-                    "Last activity": r.last_activity,
+                    # The members get their own column rather than being glued
+                    # onto the name: a long "Vihar (with A, B, C)" pushed every
+                    # figure off the side of the table.
+                    "Person": g.head,
+                    "With": ", ".join(n for n in g.people if n != g.head) or "—",
+                    "Given": g.given_minor / 100,
+                    "Received": g.received_minor / 100,
+                    "Net owed": g.net_minor / 100,
+                    "In short": compact(g.net_minor, currency) or "—",
+                    "Entries": sum(1 for e in shown if e.person in g.people),
+                    "Last activity": g.last_activity,
                 }
-                for r in rows
+                for g in display
             ]),
             hide_index=True,
             width="stretch",
+            column_order=None if any_group else
+                ["Person", "Given", "Received", "Net owed", "In short",
+                 "Entries", "Last activity"],
             column_config={
+                "With": st.column_config.TextColumn(
+                    "With", help="The other people in this arrangement", width="medium"
+                ),
                 "Given": st.column_config.NumberColumn(format="%.2f"),
                 "Received": st.column_config.NumberColumn(format="%.2f"),
                 "Net owed": st.column_config.NumberColumn(
@@ -182,8 +225,11 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
                 "Last activity": st.column_config.DateColumn(format="DD MMM YYYY"),
             },
         )
-        st.caption(f"Amounts in {currency.value}. Positive net = they owe you.")
-
+        st.caption(
+            f"Amounts in {currency.value}. Positive net = they owe you."
+            + ("  Grouped people count as one arrangement — open one below to "
+               "see each person." if any_group else "")
+        )
         you_owe = [r for r in rows if r.net_minor < 0]
         if you_owe:
             st.caption("You owe: " + ", ".join(r.person for r in you_owe) + ".")
@@ -244,20 +290,38 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
 
     st.divider()
 
-    st.markdown("**Open a person to see every entry**")
-    for r in rows:
+    st.markdown(
+        "**Open a group to see every entry**" if any_group
+        else "**Open a person to see every entry**"
+    )
+    for g in display:
         theirs = sorted(
-            [e for e in shown if e.person == r.person],
+            [e for e in shown if e.person in g.people],
             key=lambda e: (e.date, e.row or 0), reverse=True,
         )
-        short = compact(r.net_minor, currency)
+        short = compact(g.net_minor, currency)
+        title = g.head + (f" + {len(g.people) - 1}" if g.grouped else "")
         with st.expander(
-            f"{r.person} — {money(r.net_minor)}"
+            f"{title} — {money(g.net_minor)}"
             + (f" ({short})" if short else "")
             + f" · {len(theirs)} entr{'y' if len(theirs) == 1 else 'ies'}"
         ):
-            _settle_control(r.person, entries, currency, key)
-            entry_table(theirs, scope=f"{key}_{r.person}")
+            if g.grouped:
+                # Each person's own balance inside the arrangement. The group
+                # total is what you chase; this is who actually holds it.
+                st.caption("Inside this group:")
+                inside = [r for r in rows if r.person in g.people]
+                for r in sorted(inside, key=lambda r: -r.net_minor):
+                    st.markdown(
+                        f"- **{r.person}** — {money(r.net_minor)}"
+                        + (" *(the group head)*" if r.person == g.head else "")
+                    )
+                st.divider()
+            for person in ([g.head] if not g.grouped else sorted(g.people)):
+                if g.grouped:
+                    st.markdown(f"**{person}**")
+                _settle_control(person, entries, currency, key)
+            entry_table(theirs, scope=f"{key}_{g.head}")
 
     st.divider()
 

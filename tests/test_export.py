@@ -8,7 +8,7 @@ from datetime import date
 import pytest
 from openpyxl import load_workbook
 
-from ledger.export import _money, _rows, to_excel, to_pdf
+from ledger.export import COLUMN_HEADINGS, _money, _rows, to_excel, to_pdf
 from ledger.models import Direction, Entry
 from ledger.money import Currency
 
@@ -50,8 +50,6 @@ def test_dates_are_dates_not_strings():
 
 
 def test_every_column_is_exported():
-    from ledger.export import COLUMN_HEADINGS
-
     assert [c.value for c in sheet_of([entry(100)])[1]] == COLUMN_HEADINGS
 
 
@@ -179,3 +177,72 @@ class TestPdfSurvivesRealText:
         from ledger.export import to_pdf as build
 
         assert build([entry(500_00, note="paid ₹500 → cleared")])[:5] == b"%PDF-"
+
+
+# ------------------------------------------------------------ groups travel
+
+class TestGroupsReachTheDownloads:
+    """A group that only exists on the dashboard is a group that disagrees
+    with the spreadsheet you send someone."""
+
+    PARENTS = {"Chaitu": "Vihar"}
+
+    def book(self) -> list[Entry]:
+        return [
+            entry(1_00_000_00, person="Vihar", ledger="Family"),
+            entry(20_000_00, person="Chaitu", ledger="Side"),
+            entry(5_000_00, person="Ravi", ledger="Solo"),
+        ]
+
+    def test_every_row_names_the_group_it_rolls_up_to(self):
+        rows = _rows(self.book(), self.PARENTS)
+        by_person = {r[1]: r[8] for r in rows}
+        assert by_person["Chaitu"] == "Vihar"
+        assert by_person["Vihar"] == "Vihar"
+
+    def test_someone_ungrouped_is_their_own_group_never_blank(self):
+        """So the column can be pivoted on without special-casing."""
+        rows = _rows(self.book(), self.PARENTS)
+        assert {r[1]: r[8] for r in rows}["Ravi"] == "Ravi"
+        assert all(str(r[8]).strip() for r in rows)
+
+    def test_the_group_column_is_exported(self):
+        assert "Group" in COLUMN_HEADINGS
+        assert [c.value for c in sheet_of(self.book())[1]] == COLUMN_HEADINGS
+
+    def test_a_groups_tab_appears_when_there_are_groups(self):
+        book = load_workbook(io.BytesIO(to_excel(self.book(), self.PARENTS)))
+        assert "Groups INR" in book.sheetnames
+        rows = [r for r in book["Groups INR"].iter_rows(values_only=True)
+                if r[0] == "Vihar"]
+        assert rows, "the Groups tab has no row for Vihar"
+        _head, others, given, received, net, _last = rows[0]
+        assert others == "Chaitu"
+        assert given == pytest.approx(120_000.0)
+        assert received == pytest.approx(0.0)
+        assert net == pytest.approx(120_000.0)
+
+    def test_no_groups_tab_when_nothing_is_grouped(self):
+        book = load_workbook(io.BytesIO(to_excel(self.book(), {})))
+        assert "Groups INR" not in book.sheetnames
+
+    def test_the_group_total_matches_its_people(self):
+        book = load_workbook(io.BytesIO(to_excel(self.book(), self.PARENTS)))
+        row = next(r for r in book["Groups INR"].iter_rows(values_only=True)
+                   if r[0] == "Vihar")
+        assert row[4] == pytest.approx(120_000.0), "1,00,000 + 20,000"
+
+    def test_the_pdf_still_builds_with_groups(self):
+        assert to_pdf(self.book(), parents=self.PARENTS)[:5] == b"%PDF-"
+
+    def test_the_shared_text_names_the_group_and_its_people(self):
+        from ledger.export import summary_text
+
+        text = summary_text(self.book(), parents=self.PARENTS)
+        assert "Groups" in text
+        assert "Vihar (with Chaitu)" in text
+
+    def test_the_shared_text_is_unchanged_without_groups(self):
+        from ledger.export import summary_text
+
+        assert "Groups" not in summary_text(self.book(), parents={})

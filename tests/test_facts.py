@@ -189,3 +189,58 @@ def test_answering_needs_no_network(book, monkeypatch):
     monkeypatch.setattr(requests, "post", forbidden)
     monkeypatch.setattr(requests, "get", forbidden)
     assert facts.answer("who owes me the most", book)
+
+
+# ---------------------------------------------------------------- groups
+
+class TestGroupAnswers:
+    """Asked about Vihar when Chaitu is under him, the answer people want is
+    the family's total — that is the entire point of having grouped them."""
+
+    PARENTS = {"Chaitu": "Vihar"}
+
+    def book(self) -> list[Entry]:
+        return [
+            entry(1_00_000_00, person="Vihar", ledger="Family"),
+            entry(20_000_00, person="Chaitu", ledger="Side"),
+            entry(5_000_00, person="Ravi", ledger="Solo"),
+        ]
+
+    def test_asking_about_the_head_answers_for_the_whole_group(self):
+        reply = facts.answer("how much does Vihar owe me", self.book(),
+                             parents=self.PARENTS)
+        assert "group" in reply.lower()
+        assert format_money(1_20_000_00, Currency.INR) in reply
+
+    def test_asking_about_a_member_answers_for_the_group_too(self):
+        """Chaitu's own row is not the arrangement; Vihar's family is."""
+        reply = facts.answer("what about Chaitu", self.book(), parents=self.PARENTS)
+        assert "Vihar" in reply
+        assert format_money(1_20_000_00, Currency.INR) in reply
+
+    def test_each_person_is_still_listed_underneath(self):
+        """The total is what you chase; this is who is actually holding it."""
+        reply = facts.answer("how much does Vihar owe me", self.book(),
+                             parents=self.PARENTS)
+        assert format_money(1_00_000_00, Currency.INR) in reply
+        assert format_money(20_000_00, Currency.INR) in reply
+        assert "Chaitu" in reply
+
+    def test_somebody_ungrouped_gets_the_ordinary_answer(self):
+        reply = facts.answer("how much does Ravi owe me", self.book(),
+                             parents=self.PARENTS)
+        assert "group" not in reply.lower()
+        assert format_money(5_000_00, Currency.INR) in reply
+
+    def test_with_no_groupings_nothing_changes(self):
+        assert (
+            facts.answer("how much does Vihar owe me", self.book(), parents={})
+            == facts.answer("how much does Vihar owe me", self.book())
+        )
+
+    def test_the_group_total_is_the_sum_of_its_people(self):
+        from ledger.compute import by_group
+
+        group = next(g for g in by_group(self.book(), Currency.INR, self.PARENTS)
+                     if g.head == "Vihar")
+        assert group.net_minor == 1_00_000_00 + 20_000_00

@@ -22,7 +22,8 @@ from ledger.money import Currency
 PDF_SYMBOLS = {Currency.INR: "INR", Currency.USD: "USD"}
 
 COLUMN_HEADINGS = [
-    "Date", "Person", "Ledger", "Direction", "Amount", "Currency", "Note", "Attachment",
+    "Date", "Person", "Ledger", "Direction", "Amount", "Currency", "Note",
+    "Attachment", "Group",
 ]
 
 
@@ -42,8 +43,16 @@ def attachment_label(reference: str) -> str:
     return reference
 
 
-def _rows(entries: list[Entry]) -> list[list]:
-    """One list per entry, in COLUMN_HEADINGS order, amounts as real numbers."""
+def _rows(entries: list[Entry], parents: dict | None = None) -> list[list]:
+    """One list per entry, in COLUMN_HEADINGS order, amounts as real numbers.
+
+    The Group column says which arrangement the row rolls up to. Somebody
+    ungrouped is their own group, so the column is never blank and the
+    spreadsheet can be pivoted on it without special-casing.
+    """
+    from ledger.people import group_of
+
+    parents = parents or {}
     return [
         [
             entry.date,
@@ -54,12 +63,13 @@ def _rows(entries: list[Entry]) -> list[list]:
             entry.currency.value,
             entry.note,
             attachment_label(entry.attachment),
+            group_of(entry.person, parents),
         ]
         for entry in sorted(entries, key=lambda e: (e.date, e.person))
     ]
 
 
-def to_excel(entries: list[Entry]) -> bytes:
+def to_excel(entries: list[Entry], parents: dict | None = None) -> bytes:
     """A workbook: every entry, plus a summary sheet per currency.
 
     Returns the file's bytes so the caller can hand them straight to a
@@ -82,7 +92,7 @@ def to_excel(entries: list[Entry]) -> bytes:
         cell.font = header_font
         cell.alignment = Alignment(vertical="center")
 
-    for row in _rows(entries):
+    for row in _rows(entries, parents):
         sheet.append(row)
 
     for index, row in enumerate(sheet.iter_rows(min_row=2), start=2):
@@ -129,6 +139,38 @@ def to_excel(entries: list[Entry]) -> bytes:
         for index, width in enumerate([22, 14, 14, 14, 14, 10], start=1):
             tab.column_dimensions[get_column_letter(index)].width = width
         tab[tab.max_row][0].font = Font(bold=True)
+
+    # One tab per currency for the arrangements themselves. Ungrouped people
+    # are left out — they are already a row on the per-person summary, and
+    # repeating them as a "group of one" is noise.
+    if parents:
+        from ledger.compute import by_group
+
+        for currency in Currency:
+            subset = [e for e in entries if e.currency is currency]
+            families = [g for g in by_group(subset, currency, parents) if g.grouped]
+            if not families:
+                continue
+            tab = book.create_sheet(f"Groups {currency.value}")
+            tab.append(["Group", "People", "Given", "Received", "Net owed", "Last activity"])
+            for cell in tab[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+            for group in families:
+                tab.append([
+                    group.head,
+                    ", ".join(n for n in group.people if n != group.head),
+                    group.given_minor / 100,
+                    group.received_minor / 100,
+                    group.net_minor / 100,
+                    group.last_activity,
+                ])
+            for row in tab.iter_rows(min_row=2):
+                for cell in row[2:5]:
+                    cell.number_format = "#,##0.00"
+                row[5].number_format = "yyyy-mm-dd"
+            for index, width in enumerate([22, 30, 14, 14, 14, 14], start=1):
+                tab.column_dimensions[get_column_letter(index)].width = width
 
     buffer = io.BytesIO()
     book.save(buffer)
@@ -181,7 +223,8 @@ def _latin1(value) -> str:
     return text.encode("latin-1", "replace").decode("latin-1")
 
 
-def to_pdf(entries: list[Entry], *, today: date | None = None) -> bytes:
+def to_pdf(entries: list[Entry], *, today: date | None = None,
+           parents: dict | None = None) -> bytes:
     """A statement you could hand to someone: totals, then every entry."""
     from fpdf import FPDF
 
@@ -221,6 +264,24 @@ def to_pdf(entries: list[Entry], *, today: date | None = None) -> bytes:
             ),
             new_x="LMARGIN", new_y="NEXT",
         )
+        if parents:
+            from ledger.compute import by_group
+
+            families = [g for g in by_group(subset, currency, parents) if g.grouped]
+            if families:
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.cell(0, 6, _latin1("Groups"), new_x="LMARGIN", new_y="NEXT")
+                pdf.set_font("Helvetica", "", 9)
+                for group in families:
+                    others = ", ".join(n for n in group.people if n != group.head)
+                    pdf.cell(
+                        0, 5,
+                        _latin1(f"   {group.head} (with {others}) — "
+                                f"{_money(group.net_minor, currency)}"),
+                        new_x="LMARGIN", new_y="NEXT",
+                    )
+                pdf.ln(1)
+
         pdf.ln(2)
 
         pdf.set_font("Helvetica", "B", 9)
@@ -319,7 +380,8 @@ if __name__ == "__main__":
 from urllib.parse import quote  # noqa: E402 — kept beside the code that uses it
 
 
-def summary_text(entries: list[Entry], *, today: date | None = None) -> str:
+def summary_text(entries: list[Entry], *, today: date | None = None,
+                 parents: dict | None = None) -> str:
     """A short, readable statement of the ledger, for pasting into a message."""
     today = today or date.today()
     if not entries:
@@ -345,6 +407,22 @@ def summary_text(entries: list[Entry], *, today: date | None = None) -> str:
                 f"{_money(abs(summary.net_minor), currency)}"
                 f"  (last {summary.last_activity:%d %b %Y})"
             )
+
+        # Groups after the people, not instead of them: whoever reads this
+        # wants both "what does the family owe" and "who is holding it".
+        if parents:
+            from ledger.compute import by_group
+
+            families = [g for g in by_group(subset, currency, parents) if g.grouped]
+            if families:
+                lines.append("")
+                lines.append("  Groups")
+                for group in families:
+                    others = ", ".join(n for n in group.people if n != group.head)
+                    lines.append(
+                        f"    {group.head} (with {others}): "
+                        f"{_money(group.net_minor, currency)}"
+                    )
         lines.append("")
     return "\n".join(lines).rstrip()
 

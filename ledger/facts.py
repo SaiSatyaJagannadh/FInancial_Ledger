@@ -27,6 +27,7 @@ from datetime import date
 from ledger.compute import by_person, ledger_breakdown, totals
 from ledger.models import Direction
 from ledger.money import Currency, format_money, spoken
+from ledger.people import group_of, groups
 
 #: Marks an answer as arithmetic rather than generation, so the page can say so.
 COMPUTED = "computed"
@@ -283,6 +284,51 @@ def _open_ledgers(text: str, entries: list) -> str | None:
     return "\n".join(lines)
 
 
+def _group_balance(text: str, entries: list, parents: dict) -> str | None:
+    """What a whole arrangement owes, when the question names its head.
+
+    Asked about Vihar, the answer people want is the family's total, not
+    Vihar's own row — that is the point of grouping them. Each person is still
+    listed underneath, because the total is what you chase and the breakdown
+    is who is holding it.
+    """
+    from ledger.compute import by_group, by_person
+
+    who = _person_in(text, entries)
+    if not who:
+        return None
+    head = group_of(who, parents)
+    members = [p for p in groups({e.person for e in entries}, parents).get(head, [])]
+    if len(members) < 2:
+        return None  # not a group; the ordinary person answer is the right one
+    if not _any(text, "owe", "owes", "owed", "balance", "much", "about", "group", "total"):
+        return None
+
+    blocks: list[str] = []
+    for currency in _currencies(entries):
+        mine = [e for e in entries if e.currency is currency and e.person in members]
+        if not mine:
+            continue
+        group = next((g for g in by_group(mine, currency, parents) if g.head == head), None)
+        if group is None:
+            continue
+        lines = [
+            f"**{head}'s group** owes **{_money(group.net_minor, currency)}** "
+            f"({currency.label})  \n"
+            f"given {format_money(group.given_minor, currency)} − received "
+            f"{format_money(group.received_minor, currency)}, "
+            f"last activity {group.last_activity:%d %b %Y}.",
+            "",
+        ]
+        for summary in by_person(mine, currency):
+            mark = " *(head)*" if summary.person == head else ""
+            lines.append(
+                f"- **{summary.person}**{mark} — {_money(summary.net_minor, currency)}"
+            )
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks) or None
+
+
 #: Order matters: the narrower shapes get first refusal, so "how much does
 #: Ravi owe me" is read as a question about Ravi rather than as a grand total.
 _SHAPES = (
@@ -296,7 +342,8 @@ _SHAPES = (
 )
 
 
-def answer(question: str, entries: list, *, today: date | None = None) -> str | None:
+def answer(question: str, entries: list, *, today: date | None = None,
+           parents: dict | None = None) -> str | None:
     """An exact answer computed from the entries, or None to let the model try.
 
     Returning None is not a failure — it is this module declining to guess, and
@@ -314,6 +361,11 @@ def answer(question: str, entries: list, *, today: date | None = None) -> str | 
     # is the most convincing way to be wrong.
     if _names_a_person(text) and not _person_in(text, entries):
         return None
+
+    if parents:
+        found = _group_balance(text, entries, parents)
+        if found:
+            return found
 
     for shape in _SHAPES:
         try:

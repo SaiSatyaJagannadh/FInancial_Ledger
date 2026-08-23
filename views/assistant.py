@@ -391,7 +391,7 @@ def ask(text: str) -> None:
     # answer that `compute.py` already knows. Answering here costs no network
     # call and cannot be off by a digit. `facts.answer` returns None whenever it
     # is not certain, and then this falls through to the model unchanged.
-    computed = facts.answer(text, result.entries)
+    computed = facts.answer(text, result.entries, parents=parents)
     if computed:
         st.session_state.chat.append({
             "role": "assistant", "text": computed, "drafts": [], "rejected": [],

@@ -7,6 +7,7 @@ from datetime import date
 import streamlit as st
 
 from ledger.compute import ALL_TIME, PERIODS, filter_entries
+from ledger import people as grouping
 from ledger.export import email_link, summary_text, to_excel, to_pdf, whatsapp_link
 from ledger.money import Currency, format_money
 from ledger.ui import demo_banner, load_ledger, styles
@@ -15,6 +16,10 @@ styles()
 
 result = load_ledger()
 demo_banner(result)
+
+# Every download carries the groupings, so a spreadsheet or a forwarded
+# statement says the same thing the dashboard does.
+parents = grouping.mapping(grouping.load()[0])
 
 st.title("Download")
 st.caption("Both files hold the same rows, so they can never disagree with each other or with the screen.")
@@ -64,7 +69,7 @@ with excel_col:
     )
     st.download_button(
         "Download .xlsx",
-        data=to_excel(chosen),
+        data=to_excel(chosen, parents),
         file_name=f"personal-ledger-{stamp}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
@@ -79,7 +84,7 @@ with pdf_col:
     )
     st.download_button(
         "Download .pdf",
-        data=to_pdf(chosen),
+        data=to_pdf(chosen, parents=parents),
         file_name=f"personal-ledger-{stamp}.pdf",
         mime="application/pdf",
         width="stretch",
@@ -94,7 +99,7 @@ st.caption(
     "download it first and attach it the usual way."
 )
 
-shared = summary_text(chosen)
+shared = summary_text(chosen, parents=parents)
 st.text_area("What gets sent", value=shared, height=190, key="share_text")
 
 wa_col, mail_col = st.columns(2)
