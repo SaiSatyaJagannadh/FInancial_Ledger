@@ -15,7 +15,7 @@ rate is usually an understanding rather than a contract.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 from ledger.models import EntryError, parse_date
 from ledger.money import Currency, format_money, parse_currency, to_minor
@@ -143,6 +143,64 @@ def already_charged(charges: list[Charge], person: str, when: date,
          if c.person == person and c.month == wanted and c.currency is currency),
         None,
     )
+
+
+def months_back(count: int = 18, *, today: date | None = None) -> list[date]:
+    """The last `count` month-starts, newest first — what the month picker offers."""
+    cursor = month_start(today or date.today())
+    out = [cursor]
+    for _ in range(count - 1):
+        cursor = month_start(cursor - timedelta(days=1))
+        out.append(cursor)
+    return out
+
+
+def for_month(charges: list[Charge], when: date,
+              currency: Currency = Currency.INR) -> dict[str, Charge]:
+    """person -> their charge for that month, for the people who have one."""
+    wanted = f"{when:%Y-%m}"
+    return {
+        c.person: c for c in charges
+        if c.month == wanted and c.currency is currency
+    }
+
+
+def set_for_month(person: str, when: date, amount_minor: int, *,
+                  currency: Currency = Currency.INR, rate_percent: float = 0.0,
+                  note: str = "", source: str = "manual",
+                  secrets: dict | None = None) -> str:
+    """Set one person's interest for one month. Returns what it did.
+
+    One figure per person per month, so this is an upsert rather than an
+    append: typing over August's number has to *change* August, not add a
+    second August row that silently doubles the month.
+
+    An amount of zero removes the charge instead of storing a zero — a row
+    saying "no interest" and no row at all mean the same thing, and only one of
+    them can drift out of step with the other.
+    """
+    from ledger import store
+
+    secrets = store._secrets() if secrets is None else secrets
+    existing = for_month(load(secrets)[0], when, currency).get(person)
+
+    if amount_minor <= 0:
+        if existing is None:
+            return "unchanged"
+        remove(existing, secrets)
+        return "removed"
+
+    wanted = Charge(
+        date=month_start(when), person=person, amount_minor=amount_minor,
+        currency=currency, rate_percent=rate_percent, note=note, source=source,
+    )
+    if existing is None:
+        add(wanted, secrets)
+        return "added"
+    if existing.amount_minor == amount_minor and existing.note == wanted.note:
+        return "unchanged"
+    replace_row(existing, wanted, secrets)
+    return "updated"
 
 
 def totals(charges: list[Charge], currency: Currency) -> int:

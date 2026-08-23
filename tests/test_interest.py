@@ -169,3 +169,122 @@ def test_a_charge_is_filed_under_the_month_it_is_for():
                              person="X", amount_minor=100)
     assert charge.month == "2026-03"
     assert charge.month_label == "Mar 2026"
+
+
+# ------------------------------------------------- one figure per month
+
+class TestSettingAMonth:
+    """The page is a grid you type over, so saving twice must *change* a month
+    rather than append a second row that silently doubles it.
+
+    A fake sheet stands in for the workbook: what matters is which of
+    add/replace/remove gets called, not that gspread can be reached.
+    """
+
+    def store(self, monkeypatch, existing: list[interest.Charge]):
+        calls = {"add": [], "replace": [], "remove": []}
+        monkeypatch.setattr(interest, "load", lambda *_a, **_kw: (list(existing), []))
+        monkeypatch.setattr(interest, "add",
+                            lambda c, *_a, **_kw: calls["add"].append(c))
+        monkeypatch.setattr(interest, "replace_row",
+                            lambda o, n, *_a, **_kw: calls["replace"].append((o, n)))
+        monkeypatch.setattr(interest, "remove",
+                            lambda c, *_a, **_kw: calls["remove"].append(c))
+        return calls
+
+    def charge(self, minor: int, person="Chaitu", month=date(2026, 8, 1)):
+        return interest.Charge(date=month, person=person, amount_minor=minor, row=7)
+
+    def test_a_new_figure_is_added(self, monkeypatch):
+        calls = self.store(monkeypatch, [])
+        assert interest.set_for_month("Chaitu", date(2026, 8, 15), 35_000_00,
+                                      secrets={}) == "added"
+        assert len(calls["add"]) == 1 and not calls["replace"]
+        assert calls["add"][0].amount_minor == 35_000_00
+
+    def test_typing_over_a_month_replaces_it_never_appends(self, monkeypatch):
+        """The bug this exists to prevent: August charged twice."""
+        calls = self.store(monkeypatch, [self.charge(30_000_00)])
+        assert interest.set_for_month("Chaitu", date(2026, 8, 15), 35_000_00,
+                                      secrets={}) == "updated"
+        assert calls["add"] == [], "a second row for August would double the month"
+        assert len(calls["replace"]) == 1
+        assert calls["replace"][0][1].amount_minor == 35_000_00
+
+    def test_setting_it_to_zero_removes_the_charge(self, monkeypatch):
+        """A row saying "no interest" and no row at all mean the same thing."""
+        calls = self.store(monkeypatch, [self.charge(30_000_00)])
+        assert interest.set_for_month("Chaitu", date(2026, 8, 15), 0,
+                                      secrets={}) == "removed"
+        assert len(calls["remove"]) == 1 and not calls["add"]
+
+    def test_zero_on_a_month_with_nothing_writes_nothing(self, monkeypatch):
+        calls = self.store(monkeypatch, [])
+        assert interest.set_for_month("Chaitu", date(2026, 8, 15), 0,
+                                      secrets={}) == "unchanged"
+        assert not any(calls.values())
+
+    def test_saving_the_same_figure_again_touches_nothing(self, monkeypatch):
+        calls = self.store(monkeypatch, [self.charge(30_000_00)])
+        assert interest.set_for_month("Chaitu", date(2026, 8, 15), 30_000_00,
+                                      secrets={}) == "unchanged"
+        assert not any(calls.values())
+
+    def test_a_different_month_does_not_disturb_this_one(self, monkeypatch):
+        calls = self.store(monkeypatch, [self.charge(30_000_00, month=date(2026, 7, 1))])
+        assert interest.set_for_month("Chaitu", date(2026, 8, 15), 35_000_00,
+                                      secrets={}) == "added"
+        assert len(calls["add"]) == 1 and not calls["replace"]
+
+    def test_a_different_person_does_not_disturb_this_one(self, monkeypatch):
+        calls = self.store(monkeypatch, [self.charge(30_000_00, person="Sirisha")])
+        assert interest.set_for_month("Chaitu", date(2026, 8, 15), 35_000_00,
+                                      secrets={}) == "added"
+        assert len(calls["add"]) == 1
+
+    def test_any_day_of_the_month_files_under_the_first(self, monkeypatch):
+        calls = self.store(monkeypatch, [])
+        interest.set_for_month("Chaitu", date(2026, 8, 27), 100_00, secrets={})
+        assert calls["add"][0].date == date(2026, 8, 1)
+        assert calls["add"][0].month == "2026-08"
+
+
+class TestTheMonthPicker:
+    def test_it_offers_the_recent_months_newest_first(self):
+        months = interest.months_back(4, today=date(2026, 8, 23))
+        assert [f"{m:%b %Y}" for m in months] == [
+            "Aug 2026", "Jul 2026", "Jun 2026", "May 2026"
+        ]
+
+    def test_it_steps_back_over_a_year_boundary(self):
+        months = interest.months_back(3, today=date(2026, 1, 5))
+        assert [f"{m:%b %Y}" for m in months] == ["Jan 2026", "Dec 2025", "Nov 2025"]
+
+    def test_every_option_is_a_first_of_the_month(self):
+        assert all(m.day == 1 for m in interest.months_back(24))
+
+
+class TestReadingOneMonth:
+    CHARGES = [
+        interest.Charge(date=date(2026, 8, 1), person="Chaitu", amount_minor=35_000_00),
+        interest.Charge(date=date(2026, 7, 1), person="Chaitu", amount_minor=30_000_00),
+        interest.Charge(date=date(2026, 8, 1), person="Sirisha", amount_minor=5_000_00),
+        interest.Charge(date=date(2026, 8, 1), person="Sam", amount_minor=50_00,
+                        currency=Currency.USD),
+    ]
+
+    def test_it_returns_that_month_only(self):
+        found = interest.for_month(self.CHARGES, date(2026, 8, 20))
+        assert set(found) == {"Chaitu", "Sirisha"}
+        assert found["Chaitu"].amount_minor == 35_000_00
+
+    def test_any_day_in_the_month_finds_it(self):
+        assert interest.for_month(self.CHARGES, date(2026, 8, 1)).keys() == \
+               interest.for_month(self.CHARGES, date(2026, 8, 31)).keys()
+
+    def test_a_month_with_nothing_is_empty_not_an_error(self):
+        assert interest.for_month(self.CHARGES, date(2026, 6, 1)) == {}
+
+    def test_the_other_currency_is_kept_apart(self):
+        assert "Sam" not in interest.for_month(self.CHARGES, date(2026, 8, 1))
+        assert "Sam" in interest.for_month(self.CHARGES, date(2026, 8, 1), Currency.USD)
