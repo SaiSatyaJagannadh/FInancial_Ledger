@@ -2,10 +2,37 @@
 
 from __future__ import annotations
 
+import html
+
 import streamlit as st
 
 from ledger import store
 from ledger.money import format_money
+
+#: Only these can appear in an href. A person can type anything into the
+#: attachment box, and "javascript:" there would run on click.
+SAFE_SCHEMES = ("http://", "https://")
+
+
+def esc(value) -> str:
+    """Escape a value for use inside HTML.
+
+    Every field below is written into markup with unsafe_allow_html, and a
+    note, a person's name or a category is free text that reaches here from a
+    form, a spreadsheet cell, or a model reading an uploaded document. None of
+    those are trustworthy enough to render raw.
+    """
+    return html.escape(str(value or ""), quote=True)
+
+
+def safe_href(url: str) -> str:
+    """The URL if it is safe to link to, otherwise empty.
+
+    Anything that is not plain http(s) is dropped rather than escaped: there is
+    no legitimate reason for a statement link to be a javascript: or data: URI.
+    """
+    cleaned = str(url or "").strip()
+    return cleaned if cleaned.lower().startswith(SAFE_SCHEMES) else ""
 
 CACHE_SECONDS = 60
 
@@ -162,18 +189,20 @@ def entry_line(entry, *, show_attachment: bool = True) -> None:
         f'<span class="khata-amount {"khata-out" if outgoing else "khata-back"}">'
         f'{format_money(entry.amount_minor, entry.currency)}</span>'
         f'<span class="khata-dir">{"gave" if outgoing else "got back"}</span>'
-        f'<span class="khata-who">{entry.person}</span>'
-        f'<span class="khata-meta">· {entry.ledger} · {entry.date:%d %b %Y}'
-        + (f" · {entry.note}" if entry.note else "")
+        f'<span class="khata-who">{esc(entry.person)}</span>'
+        f'<span class="khata-meta">· {esc(entry.ledger)} · {entry.date:%d %b %Y}'
+        + (f" · {esc(entry.note)}" if entry.note else "")
         + (f' · <span class="khata-src">{_SOURCE_MARK[entry.source]}</span>'
            if entry.source in _SOURCE_MARK else "")
         + "</span></div>",
         unsafe_allow_html=True,
     )
     if show_attachment and entry.attachment:
+        href = safe_href(entry.attachment)
         st.markdown(
-            f'<div class="khata-meta">📎 <a href="{entry.attachment}" target="_blank">'
-            "statement</a></div>",
+            f'<div class="khata-meta">📎 <a href="{esc(href)}" target="_blank" '
+            'rel="noopener noreferrer">statement</a></div>'
+            if href else '<div class="khata-meta">📎 attachment</div>',
             unsafe_allow_html=True,
         )
 
@@ -384,14 +413,20 @@ def entry_table(entries: list, scope: str, *, empty: str = "Nothing here yet.") 
             f'<span class="khata-dir"> {"gave" if outgoing else "got back"}</span></div>',
             unsafe_allow_html=True,
         )
-        book.markdown(f'<div class="khata-cell">{entry.ledger}</div>', unsafe_allow_html=True)
+        book.markdown(
+            f'<div class="khata-cell">{esc(entry.ledger)}</div>', unsafe_allow_html=True
+        )
         mark = _SOURCE_MARK.get(entry.source, "")
         link = ""
         if entry.attachment and not attachment_is_stored(entry.attachment):
-            link = f' · <a href="{entry.attachment}" target="_blank">📎 link</a>'
+            href = safe_href(entry.attachment)
+            link = (
+                f' · <a href="{esc(href)}" target="_blank" rel="noopener noreferrer">'
+                "📎 link</a>"
+            ) if href else ' · <span class="khata-src">📎 link removed</span>'
         with note:
             st.markdown(
-                f'<div class="khata-cell khata-meta">{entry.note or "—"}'
+                f'<div class="khata-cell khata-meta">{esc(entry.note) or "—"}'
                 + (f' <span class="khata-src">{mark}</span>' if mark else "")
                 + link + "</div>",
                 unsafe_allow_html=True,
@@ -494,8 +529,10 @@ def transaction_table(rows: list, scope: str, *, empty: str = "Nothing here yet.
             f'{_fmt(t.amount_minor, t.currency)}</div>',
             unsafe_allow_html=True,
         )
-        category.markdown(f'<div class="khata-cell">{t.category}</div>', unsafe_allow_html=True)
-        bits = " · ".join(x for x in (t.description, t.note) if x) or "—"
+        category.markdown(
+            f'<div class="khata-cell">{esc(t.category)}</div>', unsafe_allow_html=True
+        )
+        bits = " · ".join(esc(x) for x in (t.description, t.note) if x) or "—"
         mark = _SOURCE_MARK.get(t.source, "")
         detail.markdown(
             f'<div class="khata-cell khata-meta">{bits}'

@@ -100,11 +100,11 @@ def get(reference: str, secrets: dict | None = None) -> Stored | None:
 
     wanted = id_of(reference)
     try:
-        records = _sheet(secrets).get_all_records()
+        sheet = _sheet(secrets)
+        parts = _rows_for(sheet, wanted)
     except Exception:  # noqa: BLE001 — a missing tab is not a crash
         return None
 
-    parts = [r for r in records if str(r.get("id", "")).strip() == wanted]
     if not parts:
         return None
     parts.sort(key=lambda r: int(r.get("part") or 0))
@@ -120,6 +120,46 @@ def get(reference: str, secrets: dict | None = None) -> Stored | None:
         mimetype=str(first.get("mimetype") or "application/octet-stream"),
         data=data,
     )
+
+
+def _rows_for(sheet, attachment_id: str) -> list[dict]:
+    """The rows belonging to one attachment, without reading the others.
+
+    Reading the whole tab would pull every stored file over the wire to serve
+    one of them: base64 lives in these cells, so a hundred statements is tens
+    of megabytes fetched to download a single receipt. The id column is
+    searched first, and only the matching rows are read.
+    """
+    try:
+        # Column A holds only ids, so this request stays small no matter how
+        # much base64 the tab is carrying. Measured faster than both a full
+        # scan and gspread's findall, at two attachments and at a hundred.
+        column = sheet.col_values(1)
+    except Exception:  # noqa: BLE001 — fall back rather than fail the download
+        return [
+            r for r in sheet.get_all_records()
+            if str(r.get("id", "")).strip() == attachment_id
+        ]
+
+    numbers = [
+        index for index, value in enumerate(column, start=1)
+        if str(value).strip() == attachment_id
+    ]
+    if not numbers:
+        return []
+    last = _column_letter(len(COLUMNS))
+    ranges = [f"A{n}:{last}{n}" for n in numbers]
+    rows = [block[0] if block else [] for block in sheet.batch_get(ranges)]
+    return [
+        dict(zip(COLUMNS, list(row) + [""] * (len(COLUMNS) - len(row))))
+        for row in rows if row
+    ]
+
+
+def _column_letter(index: int) -> str:
+    from ledger import store
+
+    return store._column_letter(index)
 
 
 def _sheet(secrets: dict):
