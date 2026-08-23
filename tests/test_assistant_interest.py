@@ -169,3 +169,66 @@ def test_the_summary_without_interest_reads_as_before():
                      currency=Currency.INR, note="")]
     assert "INTEREST" not in summarise(entries)
     assert "GROUPS" not in summarise(entries)
+
+
+# ------------------------------------------- a rate is applied in code
+
+class TestARateWithNoAmount:
+    """"charge Chaitu 2% this month" is the natural way to say it, and the
+    model answers with a rate and no figure. That used to be rejected as a
+    missing amount. The percentage is now applied to what the person still
+    owes, in code — the model is never asked to do the arithmetic.
+    """
+
+    from datetime import date as _date
+
+    from ledger.models import Direction, Entry
+
+    OWES = [
+        Entry(date=_date(2026, 1, 1), person="Chaitu", ledger="Loan",
+              direction=Direction.given, amount_minor=50_000_00,
+              currency=Currency.INR, note=""),
+    ]
+
+    def payload(self, **over) -> dict:
+        row = {"date": "2026-08-01", "person": "Chaitu",
+               "rate_percent": "2", "currency": "INR"}
+        row.update(over)
+        return {"interest": [row]}
+
+    def test_the_amount_is_worked_out_from_the_rate(self):
+        charge = _to_reply(self.payload(), people=["Chaitu"],
+                           entries=self.OWES).charges[0]
+        assert charge.amount_minor == 1_000_00, "2% of the ₹50,000 outstanding"
+        assert charge.rate_percent == 2.0
+
+    def test_an_explicit_amount_still_wins_over_the_rate(self):
+        """If the user said a figure, that figure is what gets proposed."""
+        charge = _to_reply(self.payload(amount="333"), people=["Chaitu"],
+                           entries=self.OWES).charges[0]
+        assert charge.amount_minor == 333_00
+
+    def test_a_rate_against_someone_who_owes_nothing_says_so(self):
+        reply = _to_reply(self.payload(), people=["Chaitu"], entries=[])
+        assert reply.charges == []
+        assert any("owe anything" in r for r in reply.rejected), reply.rejected
+
+    def test_without_the_entries_it_cannot_guess(self):
+        """No ledger to work from means no charge, not a made-up one."""
+        reply = _to_reply(self.payload(), people=["Chaitu"])
+        assert reply.charges == [] and reply.rejected
+
+    def test_the_rate_is_charged_on_the_balance_at_that_date(self):
+        """Charging for August must not know about a September repayment."""
+        from datetime import date
+
+        from ledger.models import Direction, Entry
+
+        later = self.OWES + [
+            Entry(date=date(2026, 9, 1), person="Chaitu", ledger="Loan",
+                  direction=Direction.received, amount_minor=50_000_00,
+                  currency=Currency.INR, note=""),
+        ]
+        charge = _to_reply(self.payload(), people=["Chaitu"],
+                           entries=later).charges[0]
+        assert charge.amount_minor == 1_000_00

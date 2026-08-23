@@ -165,6 +165,7 @@ with st.expander("📄  Read a statement, spreadsheet or photo"):
                             readable.data, readable.mimetype,
                             api_key=key, people=people, ledgers=ledgers,
                             person_ledgers=person_ledgers,
+                            entries=result.entries,
                         )
                         via = BY_IMAGE
                     else:
@@ -176,6 +177,7 @@ with st.expander("📄  Read a statement, spreadsheet or photo"):
                             api_key=key, people=people, ledgers=ledgers,
                             person_ledgers=person_ledgers,
                             summary=summarise(result.entries, charges, parents),
+                            entries=result.entries,
                         )
                         via = BY_IMAGE
                     respond(reply, f"**{upload.name}**", via=via)
@@ -407,6 +409,7 @@ def ask(text: str) -> None:
         reply = read_note(
             history(), api_key=key, people=people, ledgers=ledgers,
             person_ledgers=person_ledgers, summary=summarise(result.entries, charges, parents),
+                            entries=result.entries,
         )
     except Exception as exc:  # noqa: BLE001 — nothing may reach the page
         st.session_state.chat.append({

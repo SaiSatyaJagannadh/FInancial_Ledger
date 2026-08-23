@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field as dc_field
 from datetime import date
 
-from ledger.models import BY_CHAT, COLUMNS, Entry, EntryError
+from ledger.models import BY_CHAT, COLUMNS, Entry, EntryError, parse_date
 
 BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
@@ -328,13 +328,22 @@ def _extract_json(text: str) -> dict:
         raise AssistantError(f"Reply was not valid JSON: {exc}") from exc
 
 
-def _to_charges(raw_rows, people: list[str] | None, said: str = ""):
+def _to_charges(raw_rows, people: list[str] | None, said: str = "",
+                entries: list | None = None):
     """Model rows -> interest charges, through `Charge.from_row`.
 
     The same door a sheet row goes through. A misread "5,000" as "50,000" has
     to be stopped somewhere that is tested, and the prompt is not that place.
+
+    **A rate with no amount is worked out here, not asked of the model.**
+    "charge Chaitu 2% this month" is the natural way to say it, and the model
+    answers it with a rate and no figure — which used to be rejected as a
+    missing amount. The percentage is applied to what that person still owes,
+    by the same `interest.suggest` the Interest page uses, so the arithmetic
+    lands in code either way.
     """
-    from ledger.interest import COLUMNS as CHARGE_COLUMNS, Charge
+    from ledger.interest import COLUMNS as CHARGE_COLUMNS, Charge, suggest
+    from ledger.money import parse_currency
 
     charges, problems = [], []
     for raw in raw_rows or []:
@@ -347,10 +356,32 @@ def _to_charges(raw_rows, people: list[str] | None, said: str = ""):
         if stated is not None:
             row["currency"] = stated.value
         row["source"] = BY_CHAT
+
+        if not row["amount"].strip() and row["rate_percent"].strip() and entries:
+            try:
+                rate = float(row["rate_percent"])
+                when = parse_date(row["date"]) if row["date"].strip() else date.today()
+                worked = suggest(
+                    entries, row["person"], rate_percent=rate,
+                    currency=parse_currency(row["currency"]), on=when,
+                )
+            except (ValueError, EntryError):
+                worked = 0
+            if worked > 0:
+                whole, frac = divmod(worked, 100)
+                row["amount"] = f"{whole}.{frac:02d}"
+
         try:
             charges.append(Charge.from_row(row))
         except EntryError as exc:
-            problems.append(f"interest for {raw.get('person') or 'someone'}: {exc}")
+            who = raw.get("person") or "someone"
+            if "amount" in str(exc) and row["rate_percent"].strip():
+                problems.append(
+                    f"interest for {who}: {row['rate_percent']}% of nothing is "
+                    "nothing — they do not owe anything right now."
+                )
+            else:
+                problems.append(f"interest for {who}: {exc}")
     return charges, problems
 
 
@@ -389,6 +420,7 @@ def _to_reply(
     ledgers: list[str] | None = None,
     person_ledgers: dict[str, list[str]] | None = None,
     said: str = "",
+    entries: list | None = None,
 ) -> Reply:
     """Validate the model's rows through the same door a sheet row goes through."""
     question = str(payload.get("question") or "").strip()
@@ -397,7 +429,9 @@ def _to_reply(
     # Interest and groupings are validated through the same doors their own
     # modules use, so a model that miscounts a zero is stopped in exactly the
     # place a bad sheet row would be.
-    charges, charge_problems = _to_charges(payload.get("interest"), people, said)
+    charges, charge_problems = _to_charges(
+        payload.get("interest"), people, said, entries
+    )
     groupings, group_problems = _to_groupings(payload.get("grouping"), people)
     other = charge_problems + group_problems
 
@@ -448,6 +482,7 @@ def read_note(
     today: date | None = None,
     model: str = TEXT_MODEL,
     timeout: int = 90,
+    entries: list | None = None,
 ) -> Reply:
     """Read a note, or a whole conversation, into draft entries or a question.
 
@@ -480,6 +515,7 @@ def read_note(
         people, ledgers, person_ledgers,
         said=" ".join(str(m.get("content", "")) for m in history
                       if m.get("role") == "user"),
+        entries=entries,
     )
 
 
@@ -494,6 +530,7 @@ def read_image(
     today: date | None = None,
     model: str = VISION_MODEL,
     timeout: int = 150,
+    entries: list | None = None,
 ) -> Reply:
     """Read a statement or receipt image into draft entries."""
     if len(data) > MAX_IMAGE_BYTES:
@@ -520,7 +557,7 @@ def read_image(
     }
     return _to_reply(
         _extract_json(_post(payload, api_key, timeout)),
-        people, ledgers, person_ledgers,
+        people, ledgers, person_ledgers, entries=entries,
     )
 
 
