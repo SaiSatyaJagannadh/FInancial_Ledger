@@ -157,9 +157,11 @@ rather than pretending.
 
 ## Known state
 
-- The deployed app has **no authentication**; anyone with the URL can read and
-  delete. Fixing this needs a product decision (Streamlit private app vs
-  `st.login()`), not just code.
+- The deployed app is **private**: an anonymous request to
+  `saijagannadh-personal-ledger.streamlit.app` is redirected to
+  `share.streamlit.io/-/auth/app`, so viewers must sign in. There is still no
+  authorisation *inside* the app — anyone who can open it can edit and delete
+  every entry — so access is controlled entirely by Streamlit's sharing list.
 - PDF exports print `INR`/`USD` rather than `₹` — fpdf's core fonts are
   latin-1 and the glyph raises.
 - NVIDIA's endpoint has no speech-to-text, so there is no voice input.
