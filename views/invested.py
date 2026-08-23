@@ -103,7 +103,11 @@ for currency in Currency:
             tooltip=["Person", "Part", alt.Tooltip("Amount:Q", format=",.2f")],
         )
         .properties(height=max(120, 42 * len(frame))),
-        use_container_width=True,
+        # `width="stretch"`, not the deprecated `use_container_width`: on
+        # Streamlit 1.62 with Altair 6 the old argument collapsed the plot area
+        # to nothing, so every bar had zero height and all three names printed
+        # on top of each other. Every other chart in the app already uses this.
+        width="stretch",
     )
 
     st.dataframe(
@@ -112,7 +116,7 @@ for currency in Currency:
             "Interest forgone": "{:,.2f}",
             "Would be worth": "{:,.2f}",
         }),
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 

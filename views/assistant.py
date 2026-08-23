@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ledger import docs, store
+from ledger import docs, facts, store
 from dataclasses import replace
 
 from ledger.assistant import read_image, read_note, summarise
@@ -23,22 +23,33 @@ demo_banner(result)
 
 st.title("Assistant")
 st.caption(
-    "Tell me what happened and I'll draft the entry. I ask when I'm unsure "
-    "rather than guessing, and nothing is saved until you press Save."
+    "Tell me what happened and I'll draft the entry — I ask when I'm unsure "
+    "rather than guessing, and nothing is saved until you press Save. "
+    "**Questions about the ledger are answered instantly**, by adding your "
+    "sheet up rather than asking a model."
 )
 
+# No key is not the end of the page. Questions about the ledger are answered
+# by adding the sheet up, which needs nothing but the sheet — only *drafting*
+# an entry out of a sentence needs the model. Stopping here used to take the
+# working half down with the missing half.
 key = api_key()
+NO_KEY_NOTE = (
+    "**Drafting entries needs an NVIDIA API key.**\n\n"
+    "Open **Manage app → Settings → Secrets** and add this line "
+    "**at the very top**, above `[gcp_service_account]`:\n\n"
+    "```toml\nNVIDIA_API_KEY = \"nvapi-…\"\n```\n\n"
+    "It has to go above every `[section]` heading — in TOML a heading "
+    "claims every line beneath it, so a key added at the bottom becomes "
+    "part of that section instead of a setting on its own."
+)
 if not key:
-    st.error(
-        "**No NVIDIA API key configured.**\n\n"
-        "Open **Manage app → Settings → Secrets** and add this line "
-        "**at the very top**, above `[gcp_service_account]`:\n\n"
-        "```toml\nNVIDIA_API_KEY = \"nvapi-…\"\n```\n\n"
-        "It has to go above every `[section]` heading — in TOML a heading "
-        "claims every line beneath it, so a key added at the bottom becomes "
-        "part of that section instead of a setting on its own."
+    st.info(
+        "No API key configured, so I can't turn a sentence into an entry yet — "
+        "but **questions about your ledger still work**. Those are added up "
+        "from the sheet, not generated, so they need no model at all. Try "
+        "*“who owes me the most?”*"
     )
-    st.stop()
 
 people = sorted({e.person for e in result.entries})
 ledgers = sorted({e.ledger for e in result.entries})
@@ -54,11 +65,16 @@ for _entry in result.entries:
 if "chat" not in st.session_state:
     st.session_state.chat = [
         {"role": "assistant",
-         "text": "Tell me what happened — for example *“I gave 2500 to Ravi today for the "
-                 "UK ledger, by UPI”*. I'll work out the person, ledger, amount and "
-                 "direction, and show it to you before anything is saved. "
-                 "If I'm not sure about something I'll ask rather than guess, and "
-                 "I'll remember instructions like *“put these all under one person”*.",
+         "text": "Two things I can do.\n\n"
+                 "**Add an entry** — say *“I gave 2500 to Ravi today for the UK "
+                 "ledger, by UPI”* and I'll work out the person, ledger, amount "
+                 "and direction, and show it to you before anything is saved. If "
+                 "I'm not sure I'll ask rather than guess, and I'll remember "
+                 "instructions like *“put these all under one person”*.\n\n"
+                 "**Answer a question** — *“who owes me the most?”*, *“how much "
+                 "does Ravi owe me?”*, *“which ledgers are still open?”* Those "
+                 "come back instantly, added up from the sheet rather than "
+                 "written by a model, so the figures are exact.",
          "drafts": [], "rejected": []},
     ]
 
@@ -106,8 +122,11 @@ with st.expander("📄  Read a statement, spreadsheet or photo"):
         "Bank statement, UPI receipt, spreadsheet, photo of a note",
         type=docs.ACCEPTED,
         key="assistant_doc",
+        disabled=not key,
     )
-    if upload is not None:
+    if not key:
+        st.caption("Reading a document is the model's job, so this one needs the key.")
+    if upload is not None and key:
         if docs.suffix_of(upload.name) in docs.IMAGE_SUFFIXES:
             st.image(upload, width=320)
         else:
@@ -156,6 +175,11 @@ with st.expander("📄  Read a statement, spreadsheet or photo"):
 for index, turn in enumerate(st.session_state.chat):
     with st.chat_message(turn["role"]):
         st.markdown(turn["text"])
+
+        # Worth saying out loud which figures were added up and which were
+        # written by a model. Only one of the two can be off by a digit.
+        if turn.get("computed"):
+            st.caption("⚡ Added up from your sheet — no model involved.")
 
         for problem in turn.get("rejected") or []:
             st.warning(f"Skipped — {problem}")
@@ -273,12 +297,30 @@ for index, turn in enumerate(st.session_state.chat):
                             st.rerun()
 
 def ask(text: str) -> None:
-    """Send one message and record the reply.
+    """Answer one message: from the sheet if we can, from the model otherwise.
 
     Anything that goes wrong becomes a chat turn with the text kept for a
     retry. An exception reaching the page is a red traceback, which tells the
     reader nothing and loses what they typed.
     """
+    # Most questions put to a ledger are arithmetic, and arithmetic has a right
+    # answer that `compute.py` already knows. Answering here costs no network
+    # call and cannot be off by a digit. `facts.answer` returns None whenever it
+    # is not certain, and then this falls through to the model unchanged.
+    computed = facts.answer(text, result.entries)
+    if computed:
+        st.session_state.chat.append({
+            "role": "assistant", "text": computed, "drafts": [], "rejected": [],
+            "computed": True,
+        })
+        return
+
+    if not key:
+        st.session_state.chat.append({
+            "role": "assistant", "text": NO_KEY_NOTE, "drafts": [], "rejected": [],
+        })
+        return
+
     try:
         reply = read_note(
             history(), api_key=key, people=people, ledgers=ledgers,
