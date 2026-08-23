@@ -174,6 +174,69 @@ def by_person(entries: list[Entry], currency: Currency | None = None) -> list[Pe
     return rows
 
 
+@dataclass(frozen=True)
+class GroupSummary:
+    """One arrangement, once — the head plus everyone rolled up under them."""
+
+    head: str
+    currency: Currency
+    given_minor: int
+    received_minor: int
+    last_activity: date
+    people: list[str]
+    open_ledgers: int
+
+    @property
+    def net_minor(self) -> int:
+        return self.given_minor - self.received_minor
+
+    @property
+    def grouped(self) -> bool:
+        """False when this 'group' is just one person on their own."""
+        return len(self.people) > 1
+
+
+def by_group(
+    entries: list[Entry],
+    currency: Currency | None = None,
+    parents: dict[str, str] | None = None,
+) -> list[GroupSummary]:
+    """One row per arrangement, biggest net owed first.
+
+    Chaitu and Sirisha borrowing under Vihar is one arrangement with three
+    names on it, not three arrangements. With no groupings configured this is
+    `by_person` with a different shape, so the dashboard can always call it.
+
+    Single-currency only, for the same reason as `totals`.
+    """
+    from ledger.people import group_of
+
+    parents = parents or {}
+    people = by_person(entries, currency)
+    if not people:
+        return []
+    currency = currency or people[0].currency
+
+    buckets: dict[str, list[PersonSummary]] = {}
+    for summary in people:
+        buckets.setdefault(group_of(summary.person, parents), []).append(summary)
+
+    rows = [
+        GroupSummary(
+            head=head,
+            currency=currency,
+            given_minor=sum(s.given_minor for s in members),
+            received_minor=sum(s.received_minor for s in members),
+            last_activity=max(s.last_activity for s in members),
+            people=sorted(s.person for s in members),
+            open_ledgers=sum(s.open_ledgers for s in members),
+        )
+        for head, members in buckets.items()
+    ]
+    rows.sort(key=lambda r: (-r.net_minor, r.head))
+    return rows
+
+
 def month_key(value: date) -> str:
     return f"{value.year:04d}-{value.month:02d}"
 

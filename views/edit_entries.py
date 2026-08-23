@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from ledger import people as grouping
 from ledger.money import Currency, compact, format_money
 from ledger.ui import demo_banner, entry_table, load_ledger, styles
 
@@ -102,3 +103,58 @@ entry_table(
     sorted(shown, key=lambda e: (e.date, e.row or 0), reverse=True),
     scope="edit",
 )
+
+st.divider()
+
+# ------------------------------------------------------------------ grouping
+# A grouping is a fact about a person, not about a row, so it is set here once
+# rather than on each of their entries. Everything that rolls up follows.
+st.subheader("Group people together")
+st.caption(
+    "When several people borrow under one arrangement — Chaitu and Sirisha "
+    "under Vihar — put them under that person here. Their entries stay their "
+    "own; only the totals roll up."
+)
+
+everyone = sorted({e.person for e in result.entries})
+members, member_problems = grouping.load()
+for problem in member_problems:
+    st.warning(problem)
+parents = grouping.mapping(members)
+
+NOBODY = "— on their own —"
+
+who_col, under_col, set_col = st.columns([2, 2, 1])
+target = who_col.selectbox("Person", everyone, key="group_person")
+options = [NOBODY, *[p for p in everyone if p != target]]
+current = parents.get(target, "")
+under = under_col.selectbox(
+    "Comes under", options,
+    index=options.index(current) if current in options else 0,
+    key="group_parent",
+)
+with set_col:
+    st.write("")
+    if st.button("Save group", width="stretch"):
+        try:
+            grouping.set_parent(target, "" if under == NOBODY else under)
+        except Exception as exc:  # noqa: BLE001 — say what went wrong
+            st.error(str(exc))
+        else:
+            st.success(
+                f"{target} is now on their own." if under == NOBODY
+                else f"{target} now comes under {under}."
+            )
+            st.rerun()
+
+grouped = {
+    head: names
+    for head, names in grouping.groups(everyone, parents).items()
+    if len(names) > 1
+}
+if grouped:
+    for head, names in grouped.items():
+        others = [n for n in names if n != head]
+        st.markdown(f"- **{head}** — with {', '.join(others)}")
+else:
+    st.caption("Nobody is grouped yet.")

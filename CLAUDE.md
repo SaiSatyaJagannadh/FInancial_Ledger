@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~415)
+.venv/bin/python -m pytest -q                     # all tests (~500)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Several `ledger/` modules carry a `demo()` self-check runnable as
 `python -m ledger.<module>`: `assistant`, `attach`, `docs`, `export`, `invest`,
-`settle`, `spend`. These assert the behaviour that is awkward to unit-test
+`facts`, `interest`, `people`, `settle`, `spend`. These assert the behaviour that is awkward to unit-test
 (file round-trips, compounding maths, JSON parsing) and run in CI-adjacent
 fashion — keep them passing.
 
@@ -26,7 +26,9 @@ rm -f .streamlit/secrets.toml                                 # afterwards
 ```
 
 CI (`.github/workflows/ci.yml`) runs pytest on 3.11 and then boots the app
-headlessly and curls it — a page that imports but crashes on render fails CI.
+headlessly and curls it. That curl only renders the *default* page, so
+`tests/test_pages.py` runs every view through Streamlit's `AppTest` — a module
+shadowed by a local variable crashed one page while its own unit tests passed.
 
 ## Architecture
 
@@ -38,6 +40,8 @@ modules, no SQL:
 | `entries` | `ledger/store.py` | The lending ledger — who owes what |
 | `transactions` | `ledger/spend.py` | General spending, deliberately never summed into the ledger |
 | `attachments` | `ledger/attach.py` | Uploaded files, base64 across cells |
+| `interest` | `ledger/interest.py` | Monthly interest charges, **never** summed into the ledger |
+| `people` | `ledger/people.py` | Who rolls up under whom |
 
 `store._open_worksheet(secrets, tab)` is the single door to the workbook; it
 creates a missing tab rather than raising.
@@ -98,6 +102,29 @@ the next view retries instead of repeating a stale error for a minute.
 `store._status_of` digs the HTTP status out however gspread wrapped it —
 `APIError.code`, a `SpreadsheetNotFound` holding a raw response, or a bare
 builtin `PermissionError` for 403.
+
+### Interest and grouping
+
+**Interest is not a debt.** `ledger/interest.py` has its own tab and is never
+added into ledger totals — the ledger says how much of your money is out
+there, interest says what it earned while it was, and once merged the two
+cannot be told apart. `interest.suggest()` offers a figure (a month of the
+rate on what is *still owed*, not on what was first handed over) and the page
+lets it be overridden before saving, because the rate is usually an
+understanding rather than a contract.
+
+**A grouping is a fact about a person, not about a row.** `ledger/people.py`
+maps person → parent in the `people` tab, so Chaitu moving out of Vihar's
+group is one edit rather than twenty. `group_of()` walks to the top of the
+chain and **stops on a cycle** — the sheet is hand-editable, so a loop is a
+question of when, not if — and `would_cycle()` refuses one before it is saved.
+`compute.by_group()` rolls the totals up; it never changes them.
+
+**Moving money inside a group writes two entries, not one**
+(`people.transfer_entries`). When Chaitu takes from what was handed to Vihar,
+Vihar is recorded as having returned it and Chaitu as having taken it. A
+single "given" row under Chaitu would say more money left the house than
+actually did.
 
 ### The assistant (`ledger/assistant.py`)
 

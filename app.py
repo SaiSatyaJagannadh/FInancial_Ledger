@@ -18,6 +18,7 @@ st.navigation([
     st.Page("views/assistant.py", title="Assistant", icon=":material/forum:"),
     st.Page("views/spending.py", title="Spending", icon=":material/receipt_long:"),
     st.Page("views/add_spending.py", title="Add spending", icon=":material/add_card:"),
+    st.Page("views/interest.py", title="Interest", icon=":material/percent:"),
     st.Page("views/invested.py", title="Invested instead", icon=":material/trending_up:"),
     st.Page("views/export.py", title="Download", icon=":material/download:"),
 ]).run()
