@@ -362,13 +362,31 @@ class TestTheOptInLedgerEntry:
     def test_it_says_where_the_money_came_from(self):
         """Six months on, "1,500 to Sirisha" needs to explain itself."""
         entry = interest.ledger_entry(self.charge(), "Sirisha", ledger="Side")
-        assert "interest from Chaitu" in entry.note
-        assert "Aug 2026" in entry.note
+        assert "Chaitu interest for Aug 2026" in entry.note
+        assert "taken by Sirisha" in entry.note
 
-    def test_a_note_you_give_it_wins(self):
+    def test_a_typed_reason_is_added_to_the_trail_never_instead_of_it(self):
+        """The rows that prompted this said only "given to vihar but used to
+        pay proxy service" — no Narayana, no interest, no month."""
         entry = interest.ledger_entry(self.charge(), "Sirisha", ledger="Side",
                                       note="he needed it for fees")
-        assert entry.note == "he needed it for fees"
+        assert "he needed it for fees" in entry.note
+        assert "Chaitu interest for Aug 2026" in entry.note
+        assert "taken by Sirisha" in entry.note
+
+    def test_the_trail_names_all_four_things_that_matter(self):
+        """Whose interest, which month, who took it, and why."""
+        note = interest.trail_note(self.charge(), "Sirisha", "for fees")
+        for part in ("Chaitu", "Aug 2026", "Sirisha", "for fees"):
+            assert part in note, part
+
+    def test_the_trail_comes_first_so_it_survives_a_truncated_column(self):
+        note = interest.trail_note(self.charge(), "Sirisha", "for fees")
+        assert note.startswith("Chaitu interest for Aug 2026")
+
+    def test_no_dangling_separator_when_no_reason_was_typed(self):
+        for blank in ("", "   ", None):
+            assert not interest.trail_note(self.charge(), "Sirisha", blank).endswith("—")
 
     def test_it_refuses_without_somebody_to_charge(self):
         with pytest.raises(EntryError):

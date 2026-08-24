@@ -278,9 +278,27 @@ def ledger_entry(charge: Charge, person: str, *, ledger: str,
         direction=Direction.given,
         amount_minor=charge.amount_minor,
         currency=charge.currency,
-        note=note.strip() or f"interest from {charge.person}, {charge.month_label}",
+        note=trail_note(charge, person, note),
         source=BY_HAND,
     )
+
+
+def trail_note(charge: Charge, person: str, note: str = "") -> str:
+    """Why this row is in the ledger, in words that survive being read cold.
+
+    The provenance is written first and **always**, with whatever reason was
+    typed added after it. It used to be the other way round — a typed purpose
+    replaced the trail entirely — and the rows that produced said only "given
+    to vihar but used to pay proxy service": no mention of Narayana, of
+    interest, or of which month. Six months on that is a mystery, and the
+    interest tab is the only place holding the other half of the story.
+    """
+    trail = (
+        f"{charge.person} interest for {charge.month_label}, "
+        f"taken by {person.strip()}"
+    )
+    reason = str(note or "").strip()
+    return f"{trail} — {reason}" if reason else trail
 
 
 def find_ledger_entry(entries: list, charge: Charge, person: str,
