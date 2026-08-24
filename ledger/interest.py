@@ -14,6 +14,7 @@ rate is usually an understanding rather than a contract.
 
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -23,11 +24,43 @@ from ledger.money import Currency, format_money, parse_currency, to_minor
 #: The tab this lives in. Alongside the ledger's, never inside it.
 WORKSHEET = "interest"
 
+#: New columns go on the END, never in the middle. A tab that already exists
+#: keeps its old header until it is widened, and every row in it is positional
+#: — inserting a column mid-list would shift every value in every existing row
+#: one place to the right and silently rewrite people's history.
 COLUMNS = [
     "date", "person", "amount", "currency", "rate_percent", "note", "source",
+    "kind", "attachment",
 ]
 
 REQUIRED = ("date", "person", "amount")
+
+
+class Kind(str, enum.Enum):
+    """Whether this month's interest is still owed or has been handed over."""
+
+    due = "due"        # they owe it
+    given = "given"    # they have paid it
+
+    @property
+    def label(self) -> str:
+        return {"due": "Still due", "given": "Given to me"}[self.value]
+
+
+def parse_kind(value) -> Kind:
+    """Read the word, whatever form it arrives in.
+
+    Rows written before this column existed have nothing here, and the honest
+    reading of an interest row with no status is that it is still owed.
+    """
+    text = str(value or "").strip().lower()
+    if not text:
+        return Kind.due
+    if text in ("due", "owed", "pending", "unpaid", "outstanding"):
+        return Kind.due
+    if text in ("given", "paid", "received", "settled", "cleared", "got"):
+        return Kind.given
+    raise EntryError(f"kind must be 'due' or 'given', got {value!r}")
 
 #: What a month's interest is charged on: the outstanding balance at the time.
 DEFAULT_RATE = 2.0
@@ -41,8 +74,11 @@ class Charge:
     person: str
     amount_minor: int
     currency: Currency = Currency.INR
+    kind: Kind = Kind.due
     rate_percent: float = 0.0
     note: str = ""
+    #: A photo or receipt, kept in the attachments tab like everything else.
+    attachment: str = ""
     source: str = ""
     row: int | None = field(default=None, compare=False)
 
@@ -81,8 +117,10 @@ class Charge:
             person=str(row["person"]).strip(),
             amount_minor=amount,
             currency=parse_currency(row.get("currency")),
+            kind=parse_kind(row.get("kind")),
             rate_percent=rate,
             note=str(row.get("note") or "").strip(),
+            attachment=str(row.get("attachment") or "").strip(),
             source=str(row.get("source") or "").strip().lower(),
             row=row_number,
         )
@@ -98,6 +136,8 @@ class Charge:
             f"{self.rate_percent:g}",
             self.note,
             self.source,
+            self.kind.value,
+            self.attachment,
         ]
 
 
@@ -168,6 +208,7 @@ def for_month(charges: list[Charge], when: date,
 def set_for_month(person: str, when: date, amount_minor: int, *,
                   currency: Currency = Currency.INR, rate_percent: float = 0.0,
                   note: str = "", source: str = "manual",
+                  kind: Kind = Kind.due, attachment: str = "",
                   secrets: dict | None = None) -> str:
     """Set one person's interest for one month. Returns what it did.
 
@@ -192,15 +233,56 @@ def set_for_month(person: str, when: date, amount_minor: int, *,
 
     wanted = Charge(
         date=month_start(when), person=person, amount_minor=amount_minor,
-        currency=currency, rate_percent=rate_percent, note=note, source=source,
+        currency=currency, kind=kind, rate_percent=rate_percent, note=note,
+        attachment=attachment, source=source,
     )
     if existing is None:
         add(wanted, secrets)
         return "added"
-    if existing.amount_minor == amount_minor and existing.note == wanted.note:
+    if (existing.amount_minor == amount_minor and existing.note == wanted.note
+            and existing.kind is kind and existing.attachment == attachment):
         return "unchanged"
     replace_row(existing, wanted, secrets)
     return "updated"
+
+
+def ledger_entry(charge: Charge, person: str, *, ledger: str,
+                 note: str = "") -> "object":
+    """The ledger row for interest that somebody else actually took.
+
+    **The one and only way anything on the Interest page reaches the lending
+    ledger, and it happens because a person picked it, never by default.**
+    Interest normally stays out of the ledger entirely: the ledger says how
+    much of your money is out there, and interest says what it earned. But
+    when the interest money is handed on to somebody rather than kept, it has
+    stopped being interest and become a loan to them, and the ledger is where
+    loans live.
+
+    Returns the Entry. Writing it is the caller's decision.
+    """
+    from ledger.models import BY_HAND, Direction, Entry
+
+    if not person.strip():
+        raise EntryError("who took it?")
+    return Entry(
+        date=charge.date,
+        person=person.strip(),
+        ledger=ledger.strip() or "Interest",
+        direction=Direction.given,
+        amount_minor=charge.amount_minor,
+        currency=charge.currency,
+        note=note.strip() or f"interest from {charge.person}, {charge.month_label}",
+        source=BY_HAND,
+    )
+
+
+def split_by_kind(charges: list[Charge], currency: Currency) -> dict[Kind, int]:
+    """How much is still due and how much has been handed over."""
+    out = {kind: 0 for kind in Kind}
+    for charge in charges:
+        if charge.currency is currency:
+            out[charge.kind] += charge.amount_minor
+    return out
 
 
 def totals(charges: list[Charge], currency: Currency) -> int:
@@ -254,9 +336,15 @@ def load(secrets: dict | None = None) -> tuple[list[Charge], list[str]]:
         return [], []
     try:
         sheet = store._open_worksheet(secrets, WORKSHEET)
-        records = sheet.get_all_records()
-    except Exception as exc:  # noqa: BLE001 — an unreachable tab is not a crash
-        return [], [f"Could not reach the interest tab. {store._why(exc)}"]
+        # Named explicitly: a tab widened by a previous write has trailing
+        # blank headings, and gspread counts two blanks as duplicate headers
+        # and refuses to read the tab at all.
+        records = sheet.get_all_records(expected_headers=COLUMNS)
+    except Exception:  # noqa: BLE001 — fall back before giving up on the tab
+        try:
+            records = _records_by_position(sheet)
+        except Exception as exc:  # noqa: BLE001 — an unreachable tab is not a crash
+            return [], [f"Could not reach the interest tab. {store._why(exc)}"]
 
     rows: list[Charge] = []
     problems: list[str] = []
@@ -273,18 +361,47 @@ def load(secrets: dict | None = None) -> tuple[list[Charge], list[str]]:
     return rows, problems
 
 
+def _records_by_position(sheet) -> list[dict]:
+    """Read the tab by column position when its header cannot be trusted.
+
+    The header is only a label; the values are positional. If the headings are
+    stale or duplicated, reading by position still gets the data out, which
+    beats showing somebody an empty interest page.
+    """
+    values = sheet.get_all_values()
+    return [
+        dict(zip(COLUMNS, list(row) + [""] * (len(COLUMNS) - len(row))))
+        for row in values[1:]
+    ]
+
+
 def _sheet(secrets: dict):
+    """The interest tab, with its header brought up to date if need be.
+
+    A tab created before a column existed keeps the header it was made with,
+    and `get_all_records` then reads the new values under blank headings — or
+    refuses outright, because a row of two blank headings counts as duplicates.
+    Widening the header here is what makes adding a column safe. It is only
+    ever an append, so no existing cell moves.
+    """
     from ledger import store
 
     if not store.is_configured(secrets):
         raise RuntimeError("Demo mode: there is no sheet to write to.")
     sheet = store._open_worksheet(secrets, WORKSHEET)
     try:
-        first = sheet.row_values(1)
+        first = [str(v).strip() for v in sheet.row_values(1)]
     except Exception:  # noqa: BLE001 — a brand new tab has no rows at all
         first = []
-    if not any(str(v).strip() for v in first):
+
+    if not any(first):
         sheet.update(values=[COLUMNS], range_name="A1")
+        return sheet
+
+    named = [v for v in first if v]
+    if named != COLUMNS:
+        last = store._column_letter(len(COLUMNS))
+        sheet.update(values=[COLUMNS], range_name=f"A1:{last}1")
     return sheet
 
 

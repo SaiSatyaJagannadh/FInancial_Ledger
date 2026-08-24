@@ -19,7 +19,7 @@ from ledger.compute import (
     monthly_given,
     totals,
 )
-from ledger import people as grouping, settle, store
+from ledger import interest, people as grouping, settle, store
 from ledger.models import Entry
 from ledger.money import Currency, compact, format_money
 from ledger.ui import clear_cache, demo_banner, entry_table, load_ledger, styles
@@ -170,6 +170,20 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
     ):
         if compact(amount, currency):
             slot.caption(money(amount))
+
+    # Interest, said out loud and kept out of every figure above it. Leaving it
+    # off the dashboard entirely meant the only way to see it was to go looking
+    # on another page; adding it to the totals would be a lie.
+    _charges = [c for c in interest.load()[0] if c.currency is currency]
+    if _charges:
+        _total = interest.totals(_charges, currency)
+        _split = interest.split_by_kind(_charges, currency)
+        st.caption(
+            f"**Interest: {money(_total)}** "
+            f"({money(_split[interest.Kind.due])} still due, "
+            f"{money(_split[interest.Kind.given])} given) — recorded on the "
+            "Interest page and **not** included in any figure above."
+        )
 
     st.divider()
 

@@ -1,23 +1,28 @@
-"""Record the interest somebody owes this month.
+"""Record the interest somebody owes — or has handed over — this month.
 
-One form: who, which month, how much, what for. The same shape as Add entry,
-because that page already solved every part of this and a second idiom would
-be one to learn for no reason.
+One form: who, which month, how much, whether it is still due or already
+given, and what it is for. The same shape as Add entry, because that page
+already solved every part of this.
 
-**Nothing here is added to the lending ledger.** The ledger says how much of
-your money is out there; this says what it earned while it was. Once merged
-the two cannot be told apart again, so they are never merged — no code path on
-this page writes an Entry.
+**Interest stays out of the lending ledger by default.** The ledger says how
+much of your money is out there; this says what it earned while it was. The
+single exception is deliberate and opt-in: when the interest money is handed
+on to somebody else rather than kept, it has stopped being interest and become
+a loan to them, and the ledger is where loans live. That only ever happens
+because the radio was set to it — never on its own.
 """
 
 from __future__ import annotations
 
 import streamlit as st
 
-from ledger import interest, people as grouping
+from ledger import attach, interest, people as grouping, store
 from ledger.compute import by_person
 from ledger.money import Currency, compact, format_money, to_minor
-from ledger.ui import demo_banner, load_ledger, styles
+from ledger.ui import (
+    attachment_button, attachment_is_stored, clear_cache, demo_banner,
+    load_ledger, safe_href, esc, styles,
+)
 
 styles()
 
@@ -26,8 +31,8 @@ demo_banner(result)
 
 st.title("Interest")
 st.caption(
-    "What each person owes in interest this month. Enter them one at a time — "
-    "**none of it is added to the ledger.**"
+    "What each person owes in interest, or has already handed over. "
+    "**Kept out of the ledger unless you say otherwise.**"
 )
 
 charges, charge_problems = interest.load()
@@ -40,10 +45,6 @@ if not result.entries:
     st.info("Nothing lent yet, so there is nothing to charge interest on.")
     st.stop()
 
-# Each save starts a new round, and every input's key carries the round number.
-# Clearing the session value alone is not enough: the browser keeps a text
-# input's typed value while the widget's identity is unchanged, so the field
-# would still *look* full even though the app had forgotten it.
 ROUND = st.session_state.setdefault("interest_round", 0)
 
 
@@ -51,7 +52,6 @@ def field(name: str) -> str:
     return f"{name}_{ROUND}"
 
 
-# Set by a save; read on the next run so it appears above an empty form.
 if st.session_state.pop("interest_saved", None):
     st.success(st.session_state.pop("interest_saved_text", "Interest recorded."))
 
@@ -60,9 +60,7 @@ currency = Currency(
         "Currency",
         [c.value for c in Currency],
         format_func=lambda v: f"{Currency(v).flag}  {Currency(v).label}",
-        horizontal=True,
-        key=field("currency"),
-        help="Rupee and dollar interest are kept apart, like everything else.",
+        horizontal=True, key=field("currency"),
     )
 )
 
@@ -71,12 +69,16 @@ if not mine:
     st.info(f"No {currency.label} entries yet.")
     st.stop()
 
-# Only people who are already in the ledger: somebody with no entries has
-# nothing for interest to be owed on, so a free-text name here would only ever
-# be a typo.
 everyone = sorted({e.person for e in mine})
 owed = {s.person: s.net_minor for s in by_person(mine, currency)}
+TO_LEDGER = "Someone else took it → add to the ledger"
 
+
+def ledger_options(person: str) -> list[str]:
+    return sorted({e.ledger for e in mine if e.person == person}) or ["Interest"]
+
+
+# ------------------------------------------------------------------ the form
 st.divider()
 st.subheader("Add interest")
 
@@ -87,7 +89,30 @@ with month_col:
     month = st.selectbox(
         "Month *", interest.months_back(24),
         format_func=lambda d: f"{d:%B %Y}", key=field("month"),
-        help="Interest is recorded once per person per month.",
+    )
+
+status = st.radio(
+    "What happened *",
+    [interest.Kind.due.value, interest.Kind.given.value, TO_LEDGER],
+    format_func=lambda v: TO_LEDGER if v == TO_LEDGER else interest.Kind(v).label,
+    horizontal=False, key=field("kind"),
+    help=(
+        "Still due — they owe it. Given to me — they have paid it. The third "
+        "also writes a ledger entry, for when the money went to somebody else."
+    ),
+)
+to_ledger = status == TO_LEDGER
+kind = interest.Kind.given if to_ledger else interest.Kind(status)
+
+taker, taker_ledger = "", ""
+if to_ledger:
+    take_col, book_col = st.columns(2)
+    taker = take_col.selectbox(
+        "Who took it *", everyone, key=field("taker"),
+        help="A ledger entry is written against them for this amount.",
+    )
+    taker_ledger = book_col.selectbox(
+        "Onto which ledger *", ledger_options(taker), key=field("taker_ledger")
     )
 
 amount_col, purpose_col = st.columns([1, 2])
@@ -97,19 +122,22 @@ with amount_col:
     )
 with purpose_col:
     purpose = st.text_input(
-        "Purpose", placeholder="what this interest is for",
-        key=field("purpose"),
+        "Purpose", placeholder="what this interest is for", key=field("purpose")
     )
 
-# What they still owe, as context for working the figure out. Read-only: the
-# ledger is never written from this page.
+photo = st.file_uploader(
+    "Photo or receipt (optional)",
+    type=["pdf", "png", "jpg", "jpeg", "webp"], key=field("photo"),
+    help=f"Kept inside the spreadsheet, up to {attach.MAX_BYTES // 1024} KB.",
+)
+
 balance = owed.get(person, 0)
 if balance > 0:
     short = compact(balance, currency)
     st.caption(
         f"**{person}** still owes {format_money(balance, currency)}"
         + (f" ({short})" if short else "")
-        + " on the ledger — shown for reference, never changed here."
+        + " on the ledger — shown for reference."
     )
 elif balance < 0:
     st.caption(f"You owe **{person}** {format_money(abs(balance), currency)}.")
@@ -122,125 +150,275 @@ except ValueError as exc:
     minor = 0
     st.error(str(exc))
 
-# Re-entering a month replaces it rather than adding a second row. Say so, so
-# that Save overwriting a figure is a choice and not a surprise.
 already = interest.for_month(charges, month, currency).get(person)
 if already:
     st.warning(
         f"**{person}** already has {already.money()} recorded for "
-        f"{already.month_label}"
-        + (f" — “{already.note}”" if already.note else "")
-        + ". Saving will replace it."
+        f"{already.month_label}. Saving will replace it."
     )
 
 absent = []
-if not str(person or "").strip():
-    absent.append("Person")
 if not amount_text.strip():
     absent.append("Amount")
+if to_ledger and not taker:
+    absent.append("Who took it")
 if absent:
     st.warning("Still needed: **" + "**, **".join(absent) + "**")
 elif minor > 0:
-    st.info(
+    line = (
         f"**{format_money(minor, currency)}** interest from **{person}** "
-        f"for *{month:%B %Y}*"
-        + (f" — {purpose.strip()}" if purpose.strip() else "")
+        f"for *{month:%B %Y}* — {kind.label.lower()}"
     )
-
-if st.button("Save interest", type="primary", disabled=minor <= 0):
-    try:
-        what = interest.set_for_month(
-            person, month, minor, currency=currency,
-            note=purpose.strip(), source="manual",
+    if to_ledger:
+        line += (
+            f".  \nA ledger entry will also be written: **{taker}** given "
+            f"{format_money(minor, currency)} on *{taker_ledger}*."
         )
+    st.info(line)
+
+if st.button("Save interest", type="primary",
+             disabled=minor <= 0 or (to_ledger and not taker)):
+    try:
+        link = ""
+        if photo is not None:
+            with st.spinner(f"Storing {photo.name}…"):
+                link = attach.put(
+                    photo.name, photo.getvalue(),
+                    photo.type or "application/octet-stream",
+                )
+        what = interest.set_for_month(
+            person, month, minor, currency=currency, note=purpose.strip(),
+            kind=kind, attachment=link, source="manual",
+        )
+        wrote = ""
+        if to_ledger:
+            # The only path from this page to the ledger, and it is here
+            # because the radio was set to it.
+            saved = interest.for_month(interest.load()[0], month, currency)[person]
+            store.append(interest.ledger_entry(
+                saved, taker, ledger=taker_ledger, note=purpose,
+            ))
+            clear_cache()
+            wrote = f" A ledger entry was written for {taker}."
     except RuntimeError as exc:
-        # Demo mode: say so rather than pretending the row was written.
         st.warning(str(exc))
     except Exception as exc:  # noqa: BLE001 — surface what the sheet said
         st.error(f"Could not save: {type(exc).__name__}: {exc}")
     else:
-        st.session_state["interest_round"] = ROUND + 1   # a fresh, empty form
+        st.session_state["interest_round"] = ROUND + 1
         st.session_state["interest_saved"] = True
         st.session_state["interest_saved_text"] = (
             f"{'Replaced' if what == 'updated' else 'Recorded'} "
-            f"{format_money(minor, currency)} for {person}, {month:%B %Y}. "
-            "Ready for the next one."
+            f"{format_money(minor, currency)} for {person}, {month:%B %Y}."
+            + wrote
         )
         st.rerun()
 
-st.caption("Amounts here are never added to the ledger's totals.")
+st.divider()
+
+# ------------------------------------------------------------------ the list
+here = [c for c in charges if c.currency is currency]
+if not here:
+    st.caption("Nothing recorded yet in this currency.")
+    st.stop()
+
+split = interest.split_by_kind(here, currency)
+total = interest.totals(here, currency)
+
+one, two, three = st.columns(3)
+short = compact(total, currency)
+one.metric(
+    "Interest recorded",
+    f"{currency.symbol}{short}" if short else format_money(total, currency),
+    help="Never counted in the ledger's totals.",
+)
+two.metric("Still due", format_money(split[interest.Kind.due], currency))
+three.metric("Given to me", format_money(split[interest.Kind.given], currency))
+st.caption(f"Exactly: {format_money(total, currency)} — not part of any ledger figure.")
 
 st.divider()
 
-# --------------------------------------------------------------- this month
-here = [c for c in charges if c.currency is currency]
-this_month = sorted(
-    interest.for_month(charges, month, currency).values(),
-    key=lambda c: -c.amount_minor,
+ANYONE = "Everyone"
+ANY_MONTH = "All months"
+filter_who, filter_month = st.columns(2)
+with filter_who:
+    # Grouped people are offered by their group, as everywhere else.
+    charged = sorted({c.person for c in here})
+    families = grouping.groups(charged, parents)
+    heads = sorted(families)
+
+    def _label(head: str) -> str:
+        others = [n for n in families[head] if n != head]
+        return f"{head}  (+{len(others)})" if others else head
+
+    picked = st.selectbox("Person", [ANYONE, *heads], format_func=
+                          lambda v: v if v == ANYONE else _label(v))
+with filter_month:
+    seen = sorted({c.month for c in here}, reverse=True)
+    labels = {c.month: c.month_label for c in here}
+    chosen_month = st.selectbox(
+        "Month", [ANY_MONTH, *seen],
+        format_func=lambda v: v if v == ANY_MONTH else labels[v],
+    )
+
+shown = here
+if picked != ANYONE:
+    shown = [c for c in shown if c.person in families[picked]]
+if chosen_month != ANY_MONTH:
+    shown = [c for c in shown if c.month == chosen_month]
+shown = sorted(shown, key=lambda c: (c.date, c.person), reverse=True)
+
+if not shown:
+    st.info("Nothing matches those filters.")
+    st.stop()
+
+st.subheader(f"{len(shown)} charge{'s' if len(shown) != 1 else ''}")
+st.caption(
+    f"Showing {format_money(sum(c.amount_minor for c in shown), currency)} "
+    "of interest."
 )
 
-st.subheader(f"{month:%B %Y}")
-if not this_month:
-    st.caption("Nothing recorded for this month yet.")
-else:
-    month_total = sum(c.amount_minor for c in this_month)
-    for charge in this_month:
-        line, remove = st.columns([6, 1.2], vertical_alignment="center")
-        group = grouping.group_of(charge.person, parents)
-        with line:
+
+@st.dialog("Edit interest")
+def _edit(charge) -> None:
+    """Change any field of a recorded charge, then write it back to its row."""
+    from dataclasses import replace
+
+    st.caption(f"{charge.person} · {charge.month_label}")
+
+    amount = st.text_input(
+        f"Amount ({charge.currency.symbol})",
+        value=f"{charge.amount_minor / 100:.2f}",
+    )
+    new_kind = st.radio(
+        "What happened", list(interest.Kind),
+        index=list(interest.Kind).index(charge.kind),
+        format_func=lambda k: k.label, horizontal=True,
+    )
+    note = st.text_input("Purpose", value=charge.note)
+    link = st.text_input("Attachment reference", value=charge.attachment,
+                         help="Leave as it is unless you are clearing it.")
+
+    also = st.checkbox(
+        "Someone else took this — add it to the main ledger",
+        help="Writes a ledger entry for the amount. Nothing is written unless "
+             "this is ticked.",
+    )
+    taker_now, book_now = "", ""
+    if also:
+        take, book = st.columns(2)
+        taker_now = take.selectbox("Who took it", everyone)
+        book_now = book.selectbox("Onto which ledger", ledger_options(taker_now))
+
+    edited, problems = None, []
+    try:
+        minor_now = to_minor(amount)
+        if minor_now <= 0:
+            problems.append("Interest must be more than zero.")
+        else:
+            edited = replace(
+                charge, amount_minor=minor_now, kind=new_kind,
+                note=note.strip(), attachment=link.strip(), source="manual",
+            )
+    except Exception as exc:  # noqa: BLE001
+        problems.append(str(exc))
+    for problem in problems:
+        st.error(problem)
+
+    save, cancel = st.columns(2)
+    if save.button("Save changes", type="primary", width="stretch",
+                   disabled=edited is None or (also and not taker_now)):
+        try:
+            interest.replace_row(charge, edited)
+            if also:
+                store.append(interest.ledger_entry(
+                    edited, taker_now, ledger=book_now, note=note,
+                ))
+                clear_cache()
+        except Exception as exc:  # noqa: BLE001 — show what the sheet said
+            st.error(f"Could not save: {exc}")
+        else:
+            st.session_state["interest_edited"] = (
+                f"{edited.person} · {edited.month_label}"
+                + (f" — and a ledger entry for {taker_now}" if also else "")
+            )
+            st.rerun()
+    if cancel.button("Cancel", width="stretch"):
+        st.rerun()
+
+
+if st.session_state.pop("interest_edited", None) is not None:
+    st.success("Updated.")
+
+for charge in shown:
+    line, edit, remove = st.columns([6, 1.2, 1.2], vertical_alignment="center")
+    group = grouping.group_of(charge.person, parents)
+    with line:
+        st.markdown(
+            f'<div class="khata-row">'
+            f'<span class="khata-amount '
+            f'{"khata-back" if charge.kind is interest.Kind.given else "khata-out"}">'
+            f'{charge.money()}</span>'
+            f'<span class="khata-dir">{esc(charge.kind.label)}</span>'
+            f'<span class="khata-who">{esc(charge.person)}</span>'
+            f'<span class="khata-meta">· {charge.month_label}'
+            + (f" · {esc(group)}" if group != charge.person else "")
+            + (f" · {esc(charge.note)}" if charge.note else "")
+            + "</span></div>",
+            unsafe_allow_html=True,
+        )
+        if charge.attachment and attachment_is_stored(charge.attachment):
+            attachment_button(charge.attachment, key=f"iatt_{charge.row}")
+        elif charge.attachment:
+            href = safe_href(charge.attachment)
             st.markdown(
-                f'<div class="khata-row">'
-                f'<span class="khata-amount khata-back">{charge.money()}</span>'
-                f'<span class="khata-who">{charge.person}</span>'
-                f'<span class="khata-meta">'
-                + (f"· {group} " if group != charge.person else "")
-                + (f"· {charge.note}" if charge.note else "")
-                + "</span></div>",
+                f'<div class="khata-meta">📎 <a href="{esc(href)}" target="_blank" '
+                'rel="noopener noreferrer">attachment</a></div>' if href
+                else '<div class="khata-meta">📎 attachment</div>',
                 unsafe_allow_html=True,
             )
-        with remove:
-            armed = f"iarm_{charge.row}"
-            if not st.session_state.get(armed):
-                if st.button("Delete", key=f"idel_{charge.row}", width="stretch"):
-                    st.session_state[armed] = True
-                    st.rerun()
-            else:
-                yes, no = st.columns(2)
-                if yes.button("Yes", key=f"iyes_{charge.row}", type="primary",
-                              width="stretch"):
-                    try:
-                        interest.remove(charge)
-                    except Exception as exc:  # noqa: BLE001
-                        st.error(f"Could not delete: {exc}")
-                    st.session_state[armed] = False
-                    st.rerun()
-                if no.button("No", key=f"ino_{charge.row}", width="stretch"):
-                    st.session_state[armed] = False
-                    st.rerun()
-        st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
-    st.caption(
-        f"{month:%B %Y} totals **{format_money(month_total, currency)}** across "
-        f"{len(this_month)} {'person' if len(this_month) == 1 else 'people'}."
+    with edit:
+        if st.button("Edit", key=f"iedit_{charge.row}", width="stretch"):
+            _edit(charge)
+    with remove:
+        armed = f"iarm_{charge.row}"
+        if not st.session_state.get(armed):
+            if st.button("Delete", key=f"idel_{charge.row}", width="stretch"):
+                st.session_state[armed] = True
+                st.rerun()
+        else:
+            yes, no = st.columns(2)
+            if yes.button("Yes", key=f"iyes_{charge.row}", type="primary",
+                          width="stretch"):
+                try:
+                    interest.remove(charge)
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Could not delete: {exc}")
+                st.session_state[armed] = False
+                st.rerun()
+            if no.button("No", key=f"ino_{charge.row}", width="stretch"):
+                st.session_state[armed] = False
+                st.rerun()
+    st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
+
+# ------------------------------------------------------------- by person
+st.divider()
+st.subheader("Total by person")
+
+rows = interest.by_person(shown, currency)
+for row in rows:
+    head = grouping.group_of(row["person"], parents)
+    st.markdown(
+        f"- **{row['person']}** — {format_money(row['total_minor'], currency)} "
+        f"over {row['months']} month{'s' if row['months'] != 1 else ''}"
+        + (f" · under *{head}*" if head != row["person"] else "")
     )
 
-# ----------------------------------------------------------- everything else
-if here:
-    st.divider()
-    total = interest.totals(here, currency)
-    one, two, three = st.columns(3)
-    short = compact(total, currency)
-    one.metric(
-        "Interest recorded",
-        f"{currency.symbol}{short}" if short else format_money(total, currency),
-        help="Across every month. Never counted in the ledger's totals.",
-    )
-    two.metric("Months", f"{len({c.month for c in here})}")
-    three.metric("People", f"{len({c.person for c in here})}")
-    st.caption(f"Exactly: {format_money(total, currency)} — not part of any ledger figure.")
-
-    with st.expander("Everything recorded"):
-        for charge in sorted(here, key=lambda c: (c.date, c.person), reverse=True):
-            st.markdown(
-                f"- **{charge.month_label}** · {charge.person} — {charge.money()}"
-                + (f" · _{charge.note}_" if charge.note else "")
-            )
+if any(grouping.group_of(r["person"], parents) != r["person"] for r in rows):
+    st.markdown("**By group**")
+    per_group: dict[str, int] = {}
+    for row in rows:
+        head = grouping.group_of(row["person"], parents)
+        per_group[head] = per_group.get(head, 0) + row["total_minor"]
+    for head, amount in sorted(per_group.items(), key=lambda kv: -kv[1]):
+        st.markdown(f"- **{head}** — {format_money(amount, currency)}")

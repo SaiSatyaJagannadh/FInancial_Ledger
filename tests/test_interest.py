@@ -291,12 +291,14 @@ class TestReadingOneMonth:
         assert "Sam" in interest.for_month(self.CHARGES, date(2026, 8, 1), Currency.USD)
 
 
-class TestTheInterestPageCannotWriteToTheLedger:
-    """The one rule this whole feature exists to keep.
+class TestTheLedgerIsOnlyEverTouchedOnPurpose:
+    """Interest stays out of the ledger unless somebody chooses otherwise.
 
-    Checked against the page's source rather than its behaviour: a runtime
-    test only covers the paths it happens to walk, and what matters here is
-    that there is *no* path at all. If a future edit adds one, this fails.
+    That rule changed shape: the page now has one deliberate, opt-in path for
+    when the interest money is handed on to somebody else — at that point it
+    has stopped being interest and become a loan to them. What must stay true
+    is that the path is *narrow*: a single named helper, never a bare Entry
+    built somewhere in a view, and never reachable without a person choosing.
     """
 
     SOURCE = (
@@ -304,23 +306,179 @@ class TestTheInterestPageCannotWriteToTheLedger:
     ).read_text()
 
     @pytest.mark.parametrize("forbidden", [
-        "store.append",     # writes an entry
-        "store.update",     # rewrites one
-        "store.delete",     # removes one
-        "Entry(",           # builds one
-        "transfer_entries", # writes two
+        "store.update",       # rewriting a ledger row
+        "store.delete",       # removing one
+        "Entry(",             # building one by hand, outside the helper
+        "transfer_entries",   # the group-move path does not belong here
     ])
-    def test_the_page_never_writes_a_ledger_row(self, forbidden):
+    def test_the_page_has_no_other_way_into_the_ledger(self, forbidden):
         assert forbidden not in self.SOURCE, (
-            f"views/interest.py contains {forbidden!r} — interest must never "
-            "reach the lending ledger"
+            f"views/interest.py contains {forbidden!r} — the only route to the "
+            "ledger is interest.ledger_entry()"
         )
 
-    def test_it_says_so_on_screen_too(self):
+    def test_every_ledger_write_goes_through_the_named_helper(self):
+        """One helper, so there is one place to read and one place to test."""
+        appends = self.SOURCE.count("store.append(")
+        through = self.SOURCE.count("interest.ledger_entry(")
+        assert appends == through, (
+            f"{appends} ledger writes but {through} go through ledger_entry()"
+        )
+        assert appends >= 1, "the opt-in path has gone missing"
+
+    def test_it_says_on_screen_that_interest_stays_out_of_the_ledger(self):
         """A rule the reader cannot see is a rule they will not trust."""
-        assert "added to the ledger" in self.SOURCE
+        assert "ledger" in self.SOURCE and "Kept out of the ledger" in self.SOURCE
 
     def test_the_guard_would_actually_catch_something(self):
-        """Guard against the file being renamed and this silently passing."""
         assert len(self.SOURCE) > 500
         assert "interest.set_for_month" in self.SOURCE
+
+
+class TestTheOptInLedgerEntry:
+    """interest.ledger_entry() — the one bridge, in isolation."""
+
+    def charge(self, minor=1_500_00, person="Chaitu"):
+        return interest.Charge(date=date(2026, 8, 1), person=person,
+                               amount_minor=minor, note="monthly")
+
+    def test_it_becomes_a_loan_to_whoever_took_it(self):
+        entry = interest.ledger_entry(self.charge(), "Sirisha", ledger="Side")
+        assert entry.person == "Sirisha"
+        assert entry.direction is Direction.given
+        assert entry.amount_minor == 1_500_00
+        assert entry.ledger == "Side"
+
+    def test_it_is_a_real_entry_the_ledger_would_accept(self):
+        entry = interest.ledger_entry(self.charge(), "Sirisha", ledger="Side")
+        assert isinstance(entry, Entry)
+        assert entry.currency is Currency.INR
+
+    def test_it_says_where_the_money_came_from(self):
+        """Six months on, "1,500 to Sirisha" needs to explain itself."""
+        entry = interest.ledger_entry(self.charge(), "Sirisha", ledger="Side")
+        assert "interest from Chaitu" in entry.note
+        assert "Aug 2026" in entry.note
+
+    def test_a_note_you_give_it_wins(self):
+        entry = interest.ledger_entry(self.charge(), "Sirisha", ledger="Side",
+                                      note="he needed it for fees")
+        assert entry.note == "he needed it for fees"
+
+    def test_it_refuses_without_somebody_to_charge(self):
+        with pytest.raises(EntryError):
+            interest.ledger_entry(self.charge(), "  ", ledger="Side")
+
+    def test_it_only_builds_the_entry_and_never_writes_it(self):
+        """Writing stays the caller's decision, so it cannot happen by accident."""
+        import inspect
+
+        body = inspect.getsource(interest.ledger_entry)
+        assert "append" not in body and "_sheet" not in body
+
+
+class TestDueAndGiven:
+    def test_a_row_written_before_the_column_existed_reads_as_due(self):
+        """The honest reading of an interest row with no status is "owed"."""
+        assert interest.parse_kind("") is interest.Kind.due
+        assert interest.parse_kind(None) is interest.Kind.due
+
+    @pytest.mark.parametrize("word,expected", [
+        ("due", interest.Kind.due), ("owed", interest.Kind.due),
+        ("pending", interest.Kind.due), ("GIVEN", interest.Kind.given),
+        ("paid", interest.Kind.given), ("received", interest.Kind.given),
+    ])
+    def test_it_reads_the_words_people_type(self, word, expected):
+        assert interest.parse_kind(word) is expected
+
+    def test_a_word_it_cannot_read_is_refused(self):
+        with pytest.raises(EntryError):
+            interest.parse_kind("maybe")
+
+    def test_the_kind_survives_the_sheet_round_trip(self):
+        charge = interest.Charge(date=date(2026, 8, 1), person="X",
+                                 amount_minor=100, kind=interest.Kind.given,
+                                 attachment="sheet:abc")
+        back = interest.Charge.from_row(dict(zip(interest.COLUMNS, charge.to_row())))
+        assert back.kind is interest.Kind.given
+        assert back.attachment == "sheet:abc"
+
+    def test_due_and_given_are_totalled_apart(self):
+        charges = [
+            interest.Charge(date=date(2026, 8, 1), person="A", amount_minor=1_000_00),
+            interest.Charge(date=date(2026, 8, 1), person="B", amount_minor=400_00,
+                            kind=interest.Kind.given),
+        ]
+        split = interest.split_by_kind(charges, Currency.INR)
+        assert split[interest.Kind.due] == 1_000_00
+        assert split[interest.Kind.given] == 400_00
+        assert sum(split.values()) == interest.totals(charges, Currency.INR)
+
+
+class TestAddingAColumnDoesNotShiftExistingRows:
+    """A tab written before a column existed keeps its old header, and every
+    row in it is *positional*.
+
+    This is a scar. `kind` and `attachment` were first added in the middle of
+    COLUMNS, and against the real sheet that put "due" under the heading
+    `rate_percent`, widened the tab with blank headings, and then made gspread
+    refuse to read it at all — two blank headings count as duplicates. Two rows
+    of real data went unreadable.
+    """
+
+    def test_the_new_columns_are_last(self):
+        """The rule that makes an old row still parse correctly."""
+        assert interest.COLUMNS[-2:] == ["kind", "attachment"]
+        assert interest.COLUMNS[:7] == [
+            "date", "person", "amount", "currency", "rate_percent", "note", "source"
+        ]
+
+    def test_a_row_written_before_the_columns_existed_still_reads(self):
+        """Exactly the shape sitting in the sheet today."""
+        old = ["2026-08-01", "Narayana", "15000", "INR", "0",
+               "for 3 lakh interest", "manual"]
+        charge = interest.Charge.from_row(dict(zip(interest.COLUMNS, old)))
+        assert charge.person == "Narayana"
+        assert charge.amount_minor == 15_000_00
+        assert charge.note == "for 3 lakh interest"
+        assert charge.kind is interest.Kind.due       # the honest default
+        assert charge.attachment == ""
+
+    def test_a_short_row_does_not_read_a_value_out_of_the_wrong_column(self):
+        """The failure that made "due" arrive as a rate: values shifting left."""
+        old = ["2026-08-01", "Sriram", "1000", "INR", "0", "", "manual"]
+        charge = interest.Charge.from_row(dict(zip(interest.COLUMNS, old)))
+        assert charge.rate_percent == 0.0
+        assert charge.source == "manual"
+        assert charge.note == ""
+
+    def test_to_row_and_columns_stay_the_same_length(self):
+        """If they drift, every row after the drift is written misaligned."""
+        charge = interest.Charge(date=date(2026, 8, 1), person="X",
+                                 amount_minor=100)
+        assert len(charge.to_row()) == len(interest.COLUMNS)
+
+    def test_a_full_row_round_trips_in_order(self):
+        charge = interest.Charge(
+            date=date(2026, 8, 1), person="X", amount_minor=1_500_00,
+            currency=Currency.INR, kind=interest.Kind.given, rate_percent=2.0,
+            note="n", attachment="sheet:abc", source="manual",
+        )
+        back = interest.Charge.from_row(dict(zip(interest.COLUMNS, charge.to_row())))
+        for attribute in ("person", "amount_minor", "currency", "kind",
+                          "rate_percent", "note", "attachment", "source"):
+            assert getattr(back, attribute) == getattr(charge, attribute), attribute
+
+    def test_reading_by_position_recovers_a_tab_with_a_broken_header(self):
+        """The fallback: the header is only a label, the values are the data."""
+        class Sheet:
+            def get_all_values(self):
+                return [
+                    ["date", "person", "amount", "currency", "", "", "", "", ""],
+                    ["2026-08-01", "Narayana", "15000", "INR", "0", "note", "manual"],
+                ]
+
+        rows = interest._records_by_position(Sheet())
+        assert len(rows) == 1
+        charge = interest.Charge.from_row(rows[0])
+        assert charge.person == "Narayana" and charge.amount_minor == 15_000_00
