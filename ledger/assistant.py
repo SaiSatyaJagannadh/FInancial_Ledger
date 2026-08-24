@@ -69,6 +69,9 @@ Rules:
 
 ASK a question rather than guessing when:
 - you cannot tell WHO the money involves, or HOW MUCH;
+- a grouping does not clearly name BOTH the person and who they come under —
+  "group them under him" names nobody, and a grouping applied to the wrong
+  person quietly moves somebody's whole balance;
 - a name could be the person OR just detail for the note, and you are unsure;
 - the person is new and does not match any existing name closely;
 - the message says several things and you cannot tell how many entries it is.

@@ -241,16 +241,53 @@ for index, turn in enumerate(st.session_state.chat):
                             })
                             st.rerun()
 
+        # A grouping is a draft like everything else here: it is shown, it can
+        # be corrected, and only then can it be applied. Saving straight from
+        # what the model read means a misheard name silently regroups somebody.
+        ON_OWN = "— on their own —"
         for slot, (person, under) in enumerate(turn.get("groupings") or []):
+            tweak = st.session_state.get(f"gtweak_{index}_{slot}")
+            if tweak is not None:
+                person, under = tweak
+
             with st.container(border=True):
-                detail, save = st.columns([4, 1])
-                detail.markdown(
+                st.markdown(
                     f"**{person}** comes under **{under}**" if under
                     else f"**{person}** goes back to being on their own"
                 )
-                detail.caption("Changes how totals roll up. No entry moves.")
-                if save.button("Apply", key=f"gsave_{index}_{slot}", type="primary",
-                               width="stretch"):
+                st.caption(
+                    "Draft — nothing has changed yet. Check the names, then apply. "
+                    "Only the totals roll up; no entry moves."
+                )
+
+                with st.expander("Change something before applying"):
+                    who_col, under_col = st.columns(2)
+                    fixed_person = who_col.selectbox(
+                        "Person", people,
+                        index=people.index(person) if person in people else 0,
+                        key=f"gp_{index}_{slot}",
+                    )
+                    options = [ON_OWN, *[p for p in people if p != fixed_person]]
+                    current = under if under in options else ON_OWN
+                    fixed_under = under_col.selectbox(
+                        "Comes under", options,
+                        index=options.index(current),
+                        key=f"gu_{index}_{slot}",
+                    )
+                    chosen = (fixed_person, "" if fixed_under == ON_OWN else fixed_under)
+                    if chosen != (person, under):
+                        st.session_state[f"gtweak_{index}_{slot}"] = chosen
+                        st.rerun()
+
+                discard, apply = st.columns([1, 1])
+                if discard.button("Discard", key=f"gdrop_{index}_{slot}",
+                                  width="stretch"):
+                    st.session_state.chat[index]["groupings"] = [
+                        g for i, g in enumerate(turn["groupings"]) if i != slot
+                    ]
+                    st.rerun()
+                if apply.button("Apply", key=f"gsave_{index}_{slot}", type="primary",
+                                width="stretch"):
                     try:
                         grouping.set_parent(person, under)
                     except Exception as exc:  # noqa: BLE001 — say what went wrong

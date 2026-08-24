@@ -1,27 +1,23 @@
-"""Interest, a month at a time.
+"""Record the interest somebody owes this month.
 
-One screen, one question: for this month, what does each person owe in
-interest? Everybody who has ever appeared in the ledger gets a row, whether
-they are being charged this month or not, so a blank is a decision you can see
-rather than a name you forgot to add. Type over a figure to change it; set it
-to zero and the charge goes away.
+One form: who, which month, how much, what for. The same shape as Add entry,
+because that page already solved every part of this and a second idiom would
+be one to learn for no reason.
 
-**Nothing here reaches the lending ledger.** The ledger says how much of your
-money is out there; this says what it earned while it was. Once merged the two
-cannot be told apart again, so they are never merged.
+**Nothing here is added to the lending ledger.** The ledger says how much of
+your money is out there; this says what it earned while it was. Once merged
+the two cannot be told apart again, so they are never merged — no code path on
+this page writes an Entry.
 """
 
 from __future__ import annotations
 
-from datetime import date
-
-import pandas as pd
 import streamlit as st
 
-from ledger import interest, people as grouping, store
+from ledger import interest, people as grouping
 from ledger.compute import by_person
 from ledger.money import Currency, compact, format_money, to_minor
-from ledger.ui import clear_cache, demo_banner, load_ledger, styles
+from ledger.ui import demo_banner, load_ledger, styles
 
 styles()
 
@@ -30,8 +26,8 @@ demo_banner(result)
 
 st.title("Interest")
 st.caption(
-    "A month at a time. Everyone gets a row; type a figure to charge them, "
-    "leave it at zero to charge nothing. **None of this touches the ledger.**"
+    "What each person owes in interest this month. Enter them one at a time — "
+    "**none of it is added to the ledger.**"
 )
 
 charges, charge_problems = interest.load()
@@ -44,182 +40,207 @@ if not result.entries:
     st.info("Nothing lent yet, so there is nothing to charge interest on.")
     st.stop()
 
-pick_currency, pick_month = st.columns([2, 1.4])
-with pick_currency:
-    currency = Currency(
-        st.radio(
-            "Currency",
-            [c.value for c in Currency],
-            format_func=lambda v: f"{Currency(v).flag}  {Currency(v).label}",
-            horizontal=True,
-        )
+# Each save starts a new round, and every input's key carries the round number.
+# Clearing the session value alone is not enough: the browser keeps a text
+# input's typed value while the widget's identity is unchanged, so the field
+# would still *look* full even though the app had forgotten it.
+ROUND = st.session_state.setdefault("interest_round", 0)
+
+
+def field(name: str) -> str:
+    return f"{name}_{ROUND}"
+
+
+# Set by a save; read on the next run so it appears above an empty form.
+if st.session_state.pop("interest_saved", None):
+    st.success(st.session_state.pop("interest_saved_text", "Interest recorded."))
+
+currency = Currency(
+    st.radio(
+        "Currency",
+        [c.value for c in Currency],
+        format_func=lambda v: f"{Currency(v).flag}  {Currency(v).label}",
+        horizontal=True,
+        key=field("currency"),
+        help="Rupee and dollar interest are kept apart, like everything else.",
     )
-with pick_month:
-    options = interest.months_back(24)
-    month = st.selectbox(
-        "Month", options, format_func=lambda d: f"{d:%B %Y}",
-        help="Interest is recorded once per person per month.",
-    )
+)
 
 mine = [e for e in result.entries if e.currency is currency]
 if not mine:
     st.info(f"No {currency.label} entries yet.")
     st.stop()
 
-# Everyone in this currency, not only those currently in debt: somebody who
-# has settled may still owe last month's interest, and a name that vanishes
-# from the list is a name you cannot correct.
+# Only people who are already in the ledger: somebody with no entries has
+# nothing for interest to be owed on, so a free-text name here would only ever
+# be a typo.
 everyone = sorted({e.person for e in mine})
 owed = {s.person: s.net_minor for s in by_person(mine, currency)}
-existing = interest.for_month(charges, month, currency)
 
 st.divider()
+st.subheader("Add interest")
 
-# ------------------------------------------------------------------ the grid
-st.subheader(f"{month:%B %Y}")
+who_col, month_col = st.columns(2)
+with who_col:
+    person = st.selectbox("Person *", everyone, key=field("person"))
+with month_col:
+    month = st.selectbox(
+        "Month *", interest.months_back(24),
+        format_func=lambda d: f"{d:%B %Y}", key=field("month"),
+        help="Interest is recorded once per person per month.",
+    )
 
-frame = pd.DataFrame([
-    {
-        "Person": person,
-        "Group": grouping.group_of(person, parents),
-        "Still owed": owed.get(person, 0) / 100,
-        "Interest": (existing[person].amount_minor / 100) if person in existing else 0.0,
-        "Note": existing[person].note if person in existing else "",
-    }
-    for person in everyone
-])
+amount_col, purpose_col = st.columns([1, 2])
+with amount_col:
+    amount_text = st.text_input(
+        f"Amount ({currency.symbol}) *", placeholder="35000", key=field("amount")
+    )
+with purpose_col:
+    purpose = st.text_input(
+        "Purpose", placeholder="what this interest is for",
+        key=field("purpose"),
+    )
 
-edited = st.data_editor(
-    frame,
-    hide_index=True,
-    width="stretch",
-    key=f"grid_{currency.value}_{month:%Y%m}",
-    disabled=["Person", "Group", "Still owed"],
-    column_config={
-        "Person": st.column_config.TextColumn(width="medium"),
-        "Group": st.column_config.TextColumn(
-            help="Which arrangement this person rolls up to", width="small"
-        ),
-        "Still owed": st.column_config.NumberColumn(
-            f"Still owed ({currency.symbol})", format="%.2f", disabled=True,
-            help="From the ledger, for reference. Interest is never added to it.",
-        ),
-        "Interest": st.column_config.NumberColumn(
-            f"Interest ({currency.symbol})", format="%.2f", min_value=0.0,
-            help="Type the figure for this month. Zero means no charge.",
-        ),
-        "Note": st.column_config.TextColumn(width="medium"),
-    },
-)
+# What they still owe, as context for working the figure out. Read-only: the
+# ledger is never written from this page.
+balance = owed.get(person, 0)
+if balance > 0:
+    short = compact(balance, currency)
+    st.caption(
+        f"**{person}** still owes {format_money(balance, currency)}"
+        + (f" ({short})" if short else "")
+        + " on the ledger — shown for reference, never changed here."
+    )
+elif balance < 0:
+    st.caption(f"You owe **{person}** {format_money(abs(balance), currency)}.")
+else:
+    st.caption(f"**{person}** is settled on the ledger.")
 
-changes: list[tuple[str, int, str]] = []
-for _, row in edited.iterrows():
-    person = str(row["Person"])
+try:
+    minor = to_minor(amount_text) if amount_text.strip() else 0
+except ValueError as exc:
+    minor = 0
+    st.error(str(exc))
+
+# Re-entering a month replaces it rather than adding a second row. Say so, so
+# that Save overwriting a figure is a choice and not a surprise.
+already = interest.for_month(charges, month, currency).get(person)
+if already:
+    st.warning(
+        f"**{person}** already has {already.money()} recorded for "
+        f"{already.month_label}"
+        + (f" — “{already.note}”" if already.note else "")
+        + ". Saving will replace it."
+    )
+
+absent = []
+if not str(person or "").strip():
+    absent.append("Person")
+if not amount_text.strip():
+    absent.append("Amount")
+if absent:
+    st.warning("Still needed: **" + "**, **".join(absent) + "**")
+elif minor > 0:
+    st.info(
+        f"**{format_money(minor, currency)}** interest from **{person}** "
+        f"for *{month:%B %Y}*"
+        + (f" — {purpose.strip()}" if purpose.strip() else "")
+    )
+
+if st.button("Save interest", type="primary", disabled=minor <= 0):
     try:
-        typed = to_minor(f"{float(row['Interest'] or 0):.2f}")
-    except (ValueError, TypeError):
-        continue
-    note = str(row["Note"] or "").strip()
-    was = existing.get(person)
-    before = was.amount_minor if was else 0
-    if typed != before or (was is not None and note != was.note):
-        changes.append((person, typed, note))
-
-total_typed = sum(int(round(float(r["Interest"] or 0) * 100)) for _, r in edited.iterrows())
-
-left, right = st.columns([3, 1])
-with left:
-    if changes:
-        st.caption(
-            f"**{len(changes)}** change{'s' if len(changes) != 1 else ''} not saved yet: "
-            + ", ".join(
-                f"{p} → {format_money(a, currency)}" if a else f"{p} → cleared"
-                for p, a, _ in changes[:4]
-            )
-            + (" …" if len(changes) > 4 else "")
+        what = interest.set_for_month(
+            person, month, minor, currency=currency,
+            note=purpose.strip(), source="manual",
         )
+    except RuntimeError as exc:
+        # Demo mode: say so rather than pretending the row was written.
+        st.warning(str(exc))
+    except Exception as exc:  # noqa: BLE001 — surface what the sheet said
+        st.error(f"Could not save: {type(exc).__name__}: {exc}")
     else:
-        st.caption("Nothing changed yet.")
-with right:
-    if st.button("Save this month", type="primary", width="stretch",
-                 disabled=not changes):
-        done, failed = [], []
-        for person, amount, note in changes:
-            try:
-                what = interest.set_for_month(
-                    person, month, amount, currency=currency, note=note,
-                )
-            except Exception as exc:  # noqa: BLE001 — say what the sheet said
-                failed.append(f"{person}: {exc}")
-            else:
-                if what != "unchanged":
-                    done.append(person)
-        if failed:
-            for message in failed:
-                st.error(message)
-        if done:
-            st.success(
-                f"Saved {month:%B %Y} for " + ", ".join(done) + "."
-            )
-            st.rerun()
+        st.session_state["interest_round"] = ROUND + 1   # a fresh, empty form
+        st.session_state["interest_saved"] = True
+        st.session_state["interest_saved_text"] = (
+            f"{'Replaced' if what == 'updated' else 'Recorded'} "
+            f"{format_money(minor, currency)} for {person}, {month:%B %Y}. "
+            "Ready for the next one."
+        )
+        st.rerun()
 
-st.caption(
-    f"This month totals **{format_money(total_typed, currency)}** across "
-    f"{sum(1 for _, r in edited.iterrows() if float(r['Interest'] or 0) > 0)} "
-    "people — and is not part of any ledger figure."
-)
+st.caption("Amounts here are never added to the ledger's totals.")
 
 st.divider()
 
-# --------------------------------------------------------------- the history
+# --------------------------------------------------------------- this month
 here = [c for c in charges if c.currency is currency]
-if not here:
-    st.caption("No interest recorded yet in this currency.")
-    st.stop()
+this_month = sorted(
+    interest.for_month(charges, month, currency).values(),
+    key=lambda c: -c.amount_minor,
+)
 
-total = interest.totals(here, currency)
-one, two, three = st.columns(3)
-short = compact(total, currency)
-one.metric(
-    "Interest recorded",
-    f"{currency.symbol}{short}" if short else format_money(total, currency),
-    help="Across every month. Never counted in the ledger's totals.",
-)
-two.metric("Months", f"{len({c.month for c in here})}")
-three.metric("People charged", f"{len({c.person for c in here})}")
-st.caption(f"Exactly: {format_money(total, currency)}")
+st.subheader(f"{month:%B %Y}")
+if not this_month:
+    st.caption("Nothing recorded for this month yet.")
+else:
+    month_total = sum(c.amount_minor for c in this_month)
+    for charge in this_month:
+        line, remove = st.columns([6, 1.2], vertical_alignment="center")
+        group = grouping.group_of(charge.person, parents)
+        with line:
+            st.markdown(
+                f'<div class="khata-row">'
+                f'<span class="khata-amount khata-back">{charge.money()}</span>'
+                f'<span class="khata-who">{charge.person}</span>'
+                f'<span class="khata-meta">'
+                + (f"· {group} " if group != charge.person else "")
+                + (f"· {charge.note}" if charge.note else "")
+                + "</span></div>",
+                unsafe_allow_html=True,
+            )
+        with remove:
+            armed = f"iarm_{charge.row}"
+            if not st.session_state.get(armed):
+                if st.button("Delete", key=f"idel_{charge.row}", width="stretch"):
+                    st.session_state[armed] = True
+                    st.rerun()
+            else:
+                yes, no = st.columns(2)
+                if yes.button("Yes", key=f"iyes_{charge.row}", type="primary",
+                              width="stretch"):
+                    try:
+                        interest.remove(charge)
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Could not delete: {exc}")
+                    st.session_state[armed] = False
+                    st.rerun()
+                if no.button("No", key=f"ino_{charge.row}", width="stretch"):
+                    st.session_state[armed] = False
+                    st.rerun()
+        st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
+    st.caption(
+        f"{month:%B %Y} totals **{format_money(month_total, currency)}** across "
+        f"{len(this_month)} {'person' if len(this_month) == 1 else 'people'}."
+    )
 
-st.subheader("Every month, every person")
+# ----------------------------------------------------------- everything else
+if here:
+    st.divider()
+    total = interest.totals(here, currency)
+    one, two, three = st.columns(3)
+    short = compact(total, currency)
+    one.metric(
+        "Interest recorded",
+        f"{currency.symbol}{short}" if short else format_money(total, currency),
+        help="Across every month. Never counted in the ledger's totals.",
+    )
+    two.metric("Months", f"{len({c.month for c in here})}")
+    three.metric("People", f"{len({c.person for c in here})}")
+    st.caption(f"Exactly: {format_money(total, currency)} — not part of any ledger figure.")
 
-months = sorted({c.month for c in here}, reverse=True)
-#: "2026-08" sorts correctly but reads as a sort key; the heading says "Aug 2026".
-headings = {
-    key: next(c.month_label for c in here if c.month == key) for key in months
-}
-grid = pd.DataFrame(
-    [
-        {
-            "Person": person,
-            **{
-                headings[key]: next(
-                    (c.amount_minor / 100 for c in here
-                     if c.person == person and c.month == key), 0.0
-                )
-                for key in months
-            },
-            "Total": sum(c.amount_minor for c in here if c.person == person) / 100,
-        }
-        for person in sorted({c.person for c in here})
-    ]
-)
-st.dataframe(
-    grid, hide_index=True, width="stretch",
-    column_config={
-        column: st.column_config.NumberColumn(format="%.2f")
-        for column in [*headings.values(), "Total"]
-    },
-)
-st.caption(
-    f"Amounts in {currency.value}. Columns are months; a zero means nothing "
-    "was charged that month."
-)
+    with st.expander("Everything recorded"):
+        for charge in sorted(here, key=lambda c: (c.date, c.person), reverse=True):
+            st.markdown(
+                f"- **{charge.month_label}** · {charge.person} — {charge.money()}"
+                + (f" · _{charge.note}_" if charge.note else "")
+            )

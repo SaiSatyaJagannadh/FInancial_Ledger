@@ -7,6 +7,7 @@ money-never-through-a-float discipline as everywhere else.
 
 from __future__ import annotations
 
+import pathlib
 from datetime import date
 
 import pytest
@@ -288,3 +289,38 @@ class TestReadingOneMonth:
     def test_the_other_currency_is_kept_apart(self):
         assert "Sam" not in interest.for_month(self.CHARGES, date(2026, 8, 1))
         assert "Sam" in interest.for_month(self.CHARGES, date(2026, 8, 1), Currency.USD)
+
+
+class TestTheInterestPageCannotWriteToTheLedger:
+    """The one rule this whole feature exists to keep.
+
+    Checked against the page's source rather than its behaviour: a runtime
+    test only covers the paths it happens to walk, and what matters here is
+    that there is *no* path at all. If a future edit adds one, this fails.
+    """
+
+    SOURCE = (
+        pathlib.Path(__file__).resolve().parent.parent / "views" / "interest.py"
+    ).read_text()
+
+    @pytest.mark.parametrize("forbidden", [
+        "store.append",     # writes an entry
+        "store.update",     # rewrites one
+        "store.delete",     # removes one
+        "Entry(",           # builds one
+        "transfer_entries", # writes two
+    ])
+    def test_the_page_never_writes_a_ledger_row(self, forbidden):
+        assert forbidden not in self.SOURCE, (
+            f"views/interest.py contains {forbidden!r} — interest must never "
+            "reach the lending ledger"
+        )
+
+    def test_it_says_so_on_screen_too(self):
+        """A rule the reader cannot see is a rule they will not trust."""
+        assert "added to the ledger" in self.SOURCE
+
+    def test_the_guard_would_actually_catch_something(self):
+        """Guard against the file being renamed and this silently passing."""
+        assert len(self.SOURCE) > 500
+        assert "interest.set_for_month" in self.SOURCE

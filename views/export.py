@@ -6,7 +6,7 @@ from datetime import date
 
 import streamlit as st
 
-from ledger.compute import ALL_TIME, PERIODS, filter_entries
+from ledger.compute import ALL_TIME, PERIODS, by_group as _by_group, filter_entries
 from ledger import people as grouping
 from ledger.export import email_link, summary_text, to_excel, to_pdf, whatsapp_link
 from ledger.money import Currency, format_money
@@ -33,7 +33,22 @@ with period_col:
     period = st.selectbox("Period", list(PERIODS), index=list(PERIODS).index(ALL_TIME))
 with people_col:
     everyone = sorted({e.person for e in result.entries})
-    people = st.multiselect("People", everyone, default=everyone)
+    # Groups, not individual names, and nothing preselected: an empty filter
+    # already means everyone, and pre-filling it with every name made the box
+    # unreadable and gave no hint it was a filter at all. Picking a group takes
+    # its people with it, the same as the dashboard.
+    families = grouping.groups(everyone, parents)
+    heads = sorted(families)
+
+    def _label(head: str) -> str:
+        others = [n for n in families[head] if n != head]
+        return f"{head}  (+{len(others)})" if others else head
+
+    picked = st.multiselect(
+        "People", heads, format_func=_label, placeholder="Everyone",
+        help="Leave empty for everyone. Picking a group includes its people.",
+    )
+    people = sorted({name for head in picked for name in families[head]})
 with currency_col:
     choice = st.selectbox(
         "Currency", ["Both", *(c.value for c in Currency)],
@@ -55,6 +70,44 @@ for slot, unit in zip(summary[1:], Currency):
     subset = [e for e in chosen if e.currency is unit]
     net = sum(e.signed_minor for e in subset)
     slot.metric(f"Net owed · {unit.value}", format_money(net, unit) if subset else "—")
+
+# What the downloads will say about groups. Every exported row carries the
+# group it rolls up to and there is a Groups tab per currency, but none of that
+# was visible here — so there was no way to tell before opening the file
+# whether the grouping had been picked up at all.
+_families = {
+    head: names for head, names in grouping.groups(
+        sorted({e.person for e in chosen}), parents
+    ).items() if len(names) > 1
+}
+if _families:
+    with st.expander(
+        f"👪  {len(_families)} group"
+        + ("s" if len(_families) != 1 else "")
+        + " included in these downloads",
+        expanded=True,
+    ):
+        for _unit in Currency:
+            _subset = [e for e in chosen if e.currency is _unit]
+            _rows = [g for g in _by_group(_subset, _unit, parents) if g.grouped]
+            if not _rows:
+                continue
+            st.markdown(f"**{_unit.label}**")
+            for _group in _rows:
+                _others = ", ".join(n for n in _group.people if n != _group.head)
+                st.markdown(
+                    f"- **{_group.head}** — {format_money(_group.net_minor, _unit)} "
+                    f"· with {_others}"
+                )
+        st.caption(
+            "Both files carry a Group column on every row, and the spreadsheet "
+            "gets a Groups tab per currency."
+        )
+else:
+    st.caption(
+        "No groups set up. Put people under one another on **Edit entries** and "
+        "the downloads will carry the arrangement too."
+    )
 
 st.divider()
 
