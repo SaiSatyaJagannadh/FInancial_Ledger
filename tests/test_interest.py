@@ -306,8 +306,7 @@ class TestTheLedgerIsOnlyEverTouchedOnPurpose:
     ).read_text()
 
     @pytest.mark.parametrize("forbidden", [
-        "store.update",       # rewriting a ledger row
-        "store.delete",       # removing one
+        "store.delete",       # nothing here removes a ledger row
         "Entry(",             # building one by hand, outside the helper
         "transfer_entries",   # the group-move path does not belong here
     ])
@@ -317,14 +316,20 @@ class TestTheLedgerIsOnlyEverTouchedOnPurpose:
             "ledger is interest.ledger_entry()"
         )
 
-    def test_every_ledger_write_goes_through_the_named_helper(self):
-        """One helper, so there is one place to read and one place to test."""
-        appends = self.SOURCE.count("store.append(")
-        through = self.SOURCE.count("interest.ledger_entry(")
-        assert appends == through, (
-            f"{appends} ledger writes but {through} go through ledger_entry()"
+    def test_every_ledger_row_it_writes_is_built_by_the_named_helper(self):
+        """append() adds the row and update() corrects a standing one — the
+        second is what stops a re-save duplicating. Both must take their row
+        from ledger_entry(), so there is one place to read and one to test."""
+        writes = self.SOURCE.count("store.append(") + self.SOURCE.count("store.update(")
+        built = self.SOURCE.count("interest.ledger_entry(")
+        assert built >= 1, "the opt-in path has gone missing"
+        assert writes <= built * 2, (
+            f"{writes} ledger writes against {built} rows built by the helper"
         )
-        assert appends >= 1, "the opt-in path has gone missing"
+
+    def test_it_looks_for_a_standing_entry_before_writing_one(self):
+        """The guard against the duplicate that reached the real sheet."""
+        assert "find_ledger_entry" in self.SOURCE
 
     def test_it_says_on_screen_that_interest_stays_out_of_the_ledger(self):
         """A rule the reader cannot see is a rule they will not trust."""
@@ -426,12 +431,21 @@ class TestAddingAColumnDoesNotShiftExistingRows:
     of real data went unreadable.
     """
 
-    def test_the_new_columns_are_last(self):
-        """The rule that makes an old row still parse correctly."""
-        assert interest.COLUMNS[-2:] == ["kind", "attachment"]
-        assert interest.COLUMNS[:7] == [
-            "date", "person", "amount", "currency", "rate_percent", "note", "source"
-        ]
+    #: The header the tab was first created with. Every row written under it is
+    #: positional, so these seven must stay first, in this order, for ever.
+    ORIGINAL = [
+        "date", "person", "amount", "currency", "rate_percent", "note", "source",
+    ]
+
+    def test_the_original_columns_are_still_first_and_in_order(self):
+        """The rule that makes an old row still parse correctly. Anything added
+        since goes after them, where an absent value reads as a default."""
+        assert interest.COLUMNS[:len(self.ORIGINAL)] == self.ORIGINAL
+
+    def test_everything_added_since_came_after_them(self):
+        assert set(interest.COLUMNS[len(self.ORIGINAL):]) == {
+            "kind", "attachment", "moved_to"
+        }
 
     def test_a_row_written_before_the_columns_existed_still_reads(self):
         """Exactly the shape sitting in the sheet today."""
@@ -482,3 +496,101 @@ class TestAddingAColumnDoesNotShiftExistingRows:
         assert len(rows) == 1
         charge = interest.Charge.from_row(rows[0])
         assert charge.person == "Narayana" and charge.amount_minor == 15_000_00
+
+
+class TestSavingTwiceDoesNotLendTwice:
+    """The bug that reached the real sheet.
+
+    An interest charge is upserted — save it twice and there is still one row.
+    But the ledger write was a bare append, so the second save put a second
+    identical loan in the ledger. Vihar was shown owing ₹15,000 more than he
+    did, from two rows that were byte-for-byte the same.
+    """
+
+    def charge(self, minor=15_000_00):
+        return interest.Charge(date=date(2026, 7, 1), person="Narayana",
+                               amount_minor=minor, kind=interest.Kind.given,
+                               note="given to vihar but used to pay proxy service")
+
+    def written(self, charge, person="Vihar", ledger="VIHAR"):
+        return interest.ledger_entry(charge, person, ledger=ledger)
+
+    def test_the_second_save_finds_the_first_entry(self):
+        first = self.written(self.charge())
+        found = interest.find_ledger_entry([first], self.charge(), "Vihar", "VIHAR")
+        assert found is first, "a second save would have appended a duplicate"
+
+    def test_it_matches_even_when_the_note_was_reworded(self):
+        """A person is free to change the wording between saves."""
+        first = interest.ledger_entry(self.charge(), "Vihar", ledger="VIHAR",
+                                      note="one wording")
+        found = interest.find_ledger_entry([first], self.charge(), "Vihar", "VIHAR")
+        assert found is first
+
+    def test_a_different_person_is_not_a_match(self):
+        first = self.written(self.charge(), person="Sriram")
+        assert interest.find_ledger_entry([first], self.charge(), "Vihar",
+                                          "VIHAR") is None
+
+    def test_a_different_month_is_not_a_match(self):
+        first = self.written(self.charge())
+        august = interest.Charge(date=date(2026, 8, 1), person="Narayana",
+                                 amount_minor=15_000_00)
+        assert interest.find_ledger_entry([first], august, "Vihar", "VIHAR") is None
+
+    def test_a_different_ledger_is_not_a_match(self):
+        first = self.written(self.charge(), ledger="VIHAR")
+        assert interest.find_ledger_entry([first], self.charge(), "Vihar",
+                                          "Other") is None
+
+    def test_an_empty_ledger_finds_nothing(self):
+        assert interest.find_ledger_entry([], self.charge(), "Vihar", "VIHAR") is None
+
+    def test_a_changed_amount_is_still_found_so_it_can_be_corrected(self):
+        """Found, not ignored: the standing row should be updated, not doubled."""
+        first = self.written(self.charge(15_000_00))
+        found = interest.find_ledger_entry(
+            [first], self.charge(20_000_00), "Vihar", "VIHAR"
+        )
+        assert found is first
+        assert found.amount_minor != 20_000_00
+
+
+class TestMovedInterestIsCountedOnce:
+    """Once a charge has been handed on, the ledger is counting it. Leaving it
+    in the interest total as well counts the same money twice."""
+
+    CHARGES = [
+        interest.Charge(date=date(2026, 7, 1), person="Narayana",
+                        amount_minor=15_000_00, kind=interest.Kind.given,
+                        moved_to="Vihar"),
+        interest.Charge(date=date(2026, 8, 1), person="Narayana",
+                        amount_minor=15_000_00, kind=interest.Kind.due),
+    ]
+
+    def test_what_moved_is_left_out_of_the_interest_total(self):
+        assert interest.recorded_total(self.CHARGES, Currency.INR) == 15_000_00
+
+    def test_what_moved_is_reported_on_its_own(self):
+        assert interest.moved_total(self.CHARGES, Currency.INR) == 15_000_00
+
+    def test_the_two_add_back_up_to_the_gross(self):
+        assert (
+            interest.recorded_total(self.CHARGES, Currency.INR)
+            + interest.moved_total(self.CHARGES, Currency.INR)
+            == interest.totals(self.CHARGES, Currency.INR)
+        )
+
+    def test_a_moved_charge_is_left_out_of_due_and_given_too(self):
+        split = interest.split_by_kind(self.CHARGES, Currency.INR)
+        assert split[interest.Kind.given] == 0, "the moved one is counted in the ledger"
+        assert split[interest.Kind.due] == 15_000_00
+
+    def test_moved_to_survives_the_sheet_round_trip(self):
+        charge = self.CHARGES[0]
+        back = interest.Charge.from_row(dict(zip(interest.COLUMNS, charge.to_row())))
+        assert back.moved_to == "Vihar"
+
+    def test_a_row_written_before_the_column_existed_has_not_moved(self):
+        old = ["2026-08-01", "Narayana", "15000", "INR", "0", "n", "manual"]
+        assert interest.Charge.from_row(dict(zip(interest.COLUMNS, old))).moved_to == ""

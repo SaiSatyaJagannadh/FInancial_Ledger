@@ -30,7 +30,7 @@ WORKSHEET = "interest"
 #: one place to the right and silently rewrite people's history.
 COLUMNS = [
     "date", "person", "amount", "currency", "rate_percent", "note", "source",
-    "kind", "attachment",
+    "kind", "attachment", "moved_to",
 ]
 
 REQUIRED = ("date", "person", "amount")
@@ -79,6 +79,10 @@ class Charge:
     note: str = ""
     #: A photo or receipt, kept in the attachments tab like everything else.
     attachment: str = ""
+    #: Who this interest was handed on to, when it was. Non-empty means a
+    #: ledger entry exists for it, so it is no longer money owed to you as
+    #: interest — it is a loan to them, and counting it twice would be wrong.
+    moved_to: str = ""
     source: str = ""
     row: int | None = field(default=None, compare=False)
 
@@ -121,6 +125,7 @@ class Charge:
             rate_percent=rate,
             note=str(row.get("note") or "").strip(),
             attachment=str(row.get("attachment") or "").strip(),
+            moved_to=str(row.get("moved_to") or "").strip(),
             source=str(row.get("source") or "").strip().lower(),
             row=row_number,
         )
@@ -138,6 +143,7 @@ class Charge:
             self.source,
             self.kind.value,
             self.attachment,
+            self.moved_to,
         ]
 
 
@@ -209,7 +215,7 @@ def set_for_month(person: str, when: date, amount_minor: int, *,
                   currency: Currency = Currency.INR, rate_percent: float = 0.0,
                   note: str = "", source: str = "manual",
                   kind: Kind = Kind.due, attachment: str = "",
-                  secrets: dict | None = None) -> str:
+                  moved_to: str = "", secrets: dict | None = None) -> str:
     """Set one person's interest for one month. Returns what it did.
 
     One figure per person per month, so this is an upsert rather than an
@@ -234,13 +240,14 @@ def set_for_month(person: str, when: date, amount_minor: int, *,
     wanted = Charge(
         date=month_start(when), person=person, amount_minor=amount_minor,
         currency=currency, kind=kind, rate_percent=rate_percent, note=note,
-        attachment=attachment, source=source,
+        attachment=attachment, moved_to=moved_to, source=source,
     )
     if existing is None:
         add(wanted, secrets)
         return "added"
     if (existing.amount_minor == amount_minor and existing.note == wanted.note
-            and existing.kind is kind and existing.attachment == attachment):
+            and existing.kind is kind and existing.attachment == attachment
+            and existing.moved_to == moved_to):
         return "unchanged"
     replace_row(existing, wanted, secrets)
     return "updated"
@@ -276,11 +283,60 @@ def ledger_entry(charge: Charge, person: str, *, ledger: str,
     )
 
 
+def find_ledger_entry(entries: list, charge: Charge, person: str,
+                      ledger: str):
+    """The ledger row already standing for this charge, if there is one.
+
+    Without this, saving the same interest twice appended a second identical
+    ledger entry while the interest row itself was merely updated — one charge,
+    two loans, and the person shown owing fifteen thousand more than they do.
+    It happened on the real sheet.
+
+    Matched on the things that identify the row rather than on the note, which
+    a person is free to reword between saves.
+    """
+    from ledger.models import Direction
+
+    return next(
+        (
+            e for e in entries
+            if e.person == person.strip()
+            and e.ledger == (ledger.strip() or "Interest")
+            and e.currency is charge.currency
+            and e.date == charge.date
+            and e.direction is Direction.given
+        ),
+        None,
+    )
+
+
+def recorded_total(charges: list[Charge], currency: Currency) -> int:
+    """Interest still counted as interest — what has moved to the ledger is not.
+
+    Once a charge has been handed on to somebody it is a loan to them and the
+    ledger is counting it. Leaving it in this total as well would count the
+    same money twice.
+    """
+    return sum(
+        c.amount_minor for c in charges
+        if c.currency is currency and not c.moved_to
+    )
+
+
+def moved_total(charges: list[Charge], currency: Currency) -> int:
+    """How much interest has been handed on and now lives in the ledger."""
+    return sum(
+        c.amount_minor for c in charges
+        if c.currency is currency and c.moved_to
+    )
+
+
 def split_by_kind(charges: list[Charge], currency: Currency) -> dict[Kind, int]:
     """How much is still due and how much has been handed over."""
     out = {kind: 0 for kind in Kind}
     for charge in charges:
-        if charge.currency is currency:
+        # A charge that has moved to the ledger is counted there, not here.
+        if charge.currency is currency and not charge.moved_to:
             out[charge.kind] += charge.amount_minor
     return out
 

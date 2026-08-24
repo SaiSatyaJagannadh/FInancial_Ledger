@@ -11,10 +11,8 @@ from __future__ import annotations
 import streamlit as st
 
 from ledger import people as grouping
-from ledger import store
-from ledger.compute import by_person as _by_person
-from ledger.money import Currency, compact, format_money, to_minor
-from ledger.ui import clear_cache, demo_banner, entry_table, load_ledger, styles
+from ledger.money import Currency, compact, format_money
+from ledger.ui import demo_banner, entry_table, load_ledger, styles
 
 ANYONE = "Everyone"
 ANY_YEAR = "All years"
@@ -85,84 +83,6 @@ with st.expander("👪  Group people together", expanded=False):
             st.markdown(f"- **{head}** — with {', '.join(others)}")
     else:
         st.caption("Nobody is grouped yet.")
-
-# Writing to the *ledger*, not to a group setting — but it is a thing you do
-# to a group, so it lives beside the grouping editor rather than on the
-# Interest page, which no longer touches the ledger at all.
-with st.expander("↔️  Money moved inside a group", expanded=False):
-    st.caption(
-        "When one of a group's people takes from what was already handed to "
-        "the head — Chaitu out of Vihar's pot — record it here. Two entries "
-        "are written so the group still owes the same overall: the head is "
-        "shown as having returned it, and the person who took it as having "
-        "taken it."
-    )
-
-    _families = {
-        head: names
-        for head, names in grouping.groups(
-            sorted({e.person for e in result.entries}), parents
-        ).items()
-        if len(names) > 1
-    }
-    if not _families:
-        st.info("No groups yet. Put somebody under another person above first.")
-    else:
-        _cur = Currency(
-            st.radio(
-                "Currency", [c.value for c in Currency],
-                format_func=lambda v: f"{Currency(v).flag}  {Currency(v).label}",
-                horizontal=True, key="move_currency",
-            )
-        )
-        _in_cur = [e for e in result.entries if e.currency is _cur]
-        _head_col, _member_col = st.columns(2)
-        _head = _head_col.selectbox("Group head", sorted(_families), key="move_head")
-        _takers = [p for p in _families[_head] if p != _head]
-        _member = _member_col.selectbox("Who took it", _takers, key="move_member")
-
-        _pot = next(
-            (s.net_minor for s in _by_person(_in_cur, _cur) if s.person == _head), 0
-        )
-        st.caption(
-            f"**{_head}** currently holds "
-            f"{format_money(max(_pot, 0), _cur)} of yours."
-        )
-
-        _books = sorted({e.ledger for e in _in_cur if e.person == _head}) or ["Family"]
-        _book_col, _amount_col = st.columns(2)
-        _book = _book_col.selectbox("Ledger", _books, key="move_ledger")
-        _typed = _amount_col.text_input(
-            f"Amount ({_cur.symbol})", placeholder="10000", key="move_amount"
-        )
-        _reason = st.text_input("Note", placeholder="why it moved", key="move_note")
-
-        try:
-            _moved = to_minor(_typed) if _typed.strip() else 0
-        except ValueError:
-            _moved = 0
-        if _moved > _pot > 0:
-            st.warning(
-                f"That is more than the {format_money(_pot, _cur)} {_head} still "
-                "holds. Recording it anyway will put them in credit."
-            )
-
-        if st.button("Add to main ledger", type="primary",
-                     disabled=not (_member and _moved > 0)):
-            try:
-                for _row in grouping.transfer_entries(
-                    _head, _member, _moved, _cur, ledger=_book, note=_reason,
-                ):
-                    store.append(_row)
-            except Exception as exc:  # noqa: BLE001 — surface what the sheet said
-                st.error(f"Could not record it: {exc}")
-            else:
-                clear_cache()
-                st.success(
-                    f"Recorded: **{_head}** returned {format_money(_moved, _cur)} "
-                    f"and **{_member}** took it. The group still owes the same."
-                )
-                st.rerun()
 
 st.divider()
 

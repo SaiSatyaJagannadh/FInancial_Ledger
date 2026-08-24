@@ -195,11 +195,28 @@ if st.button("Save interest", type="primary",
             # The only path from this page to the ledger, and it is here
             # because the radio was set to it.
             saved = interest.for_month(interest.load()[0], month, currency)[person]
-            store.append(interest.ledger_entry(
+            fresh = interest.ledger_entry(
                 saved, taker, ledger=taker_ledger, note=purpose,
-            ))
+            )
+            # Saving the same charge twice must not put a second identical
+            # loan in the ledger. It did, on the real sheet, and Vihar was
+            # shown owing fifteen thousand more than he does.
+            standing = interest.find_ledger_entry(
+                result.entries, saved, taker, taker_ledger
+            )
+            if standing is None:
+                store.append(fresh)
+                wrote = f" A ledger entry was written for {taker}."
+            elif standing.amount_minor != fresh.amount_minor:
+                store.update(standing, fresh)
+                wrote = f" {taker}'s ledger entry was updated to match."
+            else:
+                wrote = f" {taker} already has this in the ledger — left alone."
+            interest.set_for_month(
+                person, month, minor, currency=currency, note=purpose.strip(),
+                kind=kind, attachment=link, moved_to=taker, source="manual",
+            )
             clear_cache()
-            wrote = f" A ledger entry was written for {taker}."
     except RuntimeError as exc:
         st.warning(str(exc))
     except Exception as exc:  # noqa: BLE001 — surface what the sheet said
@@ -223,18 +240,29 @@ if not here:
     st.stop()
 
 split = interest.split_by_kind(here, currency)
-total = interest.totals(here, currency)
+net = interest.recorded_total(here, currency)
+moved = interest.moved_total(here, currency)
 
-one, two, three = st.columns(3)
-short = compact(total, currency)
+one, two, three, four = st.columns(4)
+short = compact(net, currency)
 one.metric(
     "Interest recorded",
-    f"{currency.symbol}{short}" if short else format_money(total, currency),
-    help="Never counted in the ledger's totals.",
+    f"{currency.symbol}{short}" if short else format_money(net, currency),
+    help="What is still interest. Anything handed on to somebody else is "
+         "counted in the ledger instead, not twice.",
 )
 two.metric("Still due", format_money(split[interest.Kind.due], currency))
 three.metric("Given to me", format_money(split[interest.Kind.given], currency))
-st.caption(f"Exactly: {format_money(total, currency)} — not part of any ledger figure.")
+four.metric(
+    "Moved to ledger", format_money(moved, currency),
+    delta="counted there, not here", delta_color="off",
+)
+st.caption(
+    f"Exactly: {format_money(net, currency)} of interest"
+    + (f", plus {format_money(moved, currency)} now sitting in the ledger"
+       if moved else "")
+    + "."
+)
 
 st.divider()
 
@@ -364,6 +392,8 @@ for charge in shown:
             f'<span class="khata-meta">· {charge.month_label}'
             + (f" · {esc(group)}" if group != charge.person else "")
             + (f" · {esc(charge.note)}" if charge.note else "")
+            + (f' · <span class="khata-src">→ ledger, {esc(charge.moved_to)}</span>'
+               if charge.moved_to else "")
             + "</span></div>",
             unsafe_allow_html=True,
         )
@@ -400,6 +430,22 @@ for charge in shown:
                 st.session_state[armed] = False
                 st.rerun()
     st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
+
+# ------------------------------------------------------------- by month
+st.divider()
+st.subheader("Total by month")
+
+for bucket in reversed(interest.by_month(shown, currency)):
+    label = next(c.month_label for c in shown if c.month == bucket["month"])
+    of_month = [c for c in shown if c.month == bucket["month"]]
+    moved_here = sum(c.amount_minor for c in of_month if c.moved_to)
+    st.markdown(
+        f"- **{label}** — {format_money(bucket['total_minor'], currency)} "
+        f"across {len(of_month)} "
+        f"{'charge' if len(of_month) == 1 else 'charges'}"
+        + (f" · {format_money(moved_here, currency)} of it moved to the ledger"
+           if moved_here else "")
+    )
 
 # ------------------------------------------------------------- by person
 st.divider()
