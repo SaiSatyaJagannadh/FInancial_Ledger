@@ -310,22 +310,51 @@ def find_ledger_entry(entries: list, charge: Charge, person: str,
     two loans, and the person shown owing fifteen thousand more than they do.
     It happened on the real sheet.
 
-    Matched on the things that identify the row rather than on the note, which
-    a person is free to reword between saves.
+    Matched on the trail this bridge writes into the note, because that is the
+    only mark that says "this row came from that charge". Matching on shape
+    alone — person, ledger, currency, date, direction — matched *any* loan
+    handed over on the first of that month, and the next save overwrote it with
+    the interest figure. A real entry disappeared that way: the row still read
+    "given", but for the interest amount, and the money actually lent was gone.
+
+    The reason typed after the trail is ignored: a person is free to reword it
+    between saves, and `trail_note` always writes the trail first.
     """
     from ledger.models import Direction
 
+    trail = trail_note(charge, person)
     return next(
         (
             e for e in entries
-            if e.person == person.strip()
+            if e.note.startswith(trail)
+            and e.person == person.strip()
             and e.ledger == (ledger.strip() or "Interest")
             and e.currency is charge.currency
-            and e.date == charge.date
             and e.direction is Direction.given
         ),
         None,
     )
+
+
+def sync_ledger_entry(entries: list, charge: Charge, person: str, ledger: str,
+                      note: str = "") -> str:
+    """Write, or correct, the single ledger row for interest handed on.
+
+    Both places that cross from interest to the ledger come through here, so
+    the "is one already standing?" question is asked once and answered the same
+    way. Returns what it did.
+    """
+    from ledger import store
+
+    fresh = ledger_entry(charge, person, ledger=ledger, note=note)
+    standing = find_ledger_entry(entries, charge, person, ledger)
+    if standing is None:
+        store.append(fresh)
+        return "added"
+    if standing.amount_minor != fresh.amount_minor:
+        store.update(standing, fresh)
+        return "updated"
+    return "unchanged"
 
 
 def recorded_total(charges: list[Charge], currency: Currency) -> int:

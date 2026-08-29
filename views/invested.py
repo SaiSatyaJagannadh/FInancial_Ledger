@@ -1,5 +1,9 @@
 """What the outstanding money would have earned in an FD instead.
 
+**Off the router** — this page is not listed in `app.py`, so nothing links to
+it. It still renders, and putting the line back in `st.navigation` is all it
+takes to bring it back.
+
 The comparison only ever covers what is *still owed*. Money that came back is
 not an opportunity cost — you have it.
 """

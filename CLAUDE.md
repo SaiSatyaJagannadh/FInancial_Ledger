@@ -113,6 +113,13 @@ rate on what is *still owed*, not on what was first handed over) and the page
 lets it be overridden before saving, because the rate is usually an
 understanding rather than a contract.
 
+The one opt-in route from interest into the ledger goes through
+`interest.sync_ledger_entry()`, and the row it may correct is identified by the
+**trail it writes into the note** (`trail_note`), never by shape. Matching on
+person + ledger + currency + date + direction also matched an ordinary loan
+handed over on the same day, and the next save overwrote that loan with the
+interest figure — the money actually lent simply vanished from the sheet.
+
 **A grouping is a fact about a person, not about a row.** `ledger/people.py`
 maps person → parent in the `people` tab, so Chaitu moving out of Vihar's
 group is one edit rather than twenty. `group_of()` walks to the top of the
@@ -189,6 +196,9 @@ rather than pretending.
   `share.streamlit.io/-/auth/app`, so viewers must sign in. There is still no
   authorisation *inside* the app — anyone who can open it can edit and delete
   every entry — so access is controlled entirely by Streamlit's sharing list.
+- The **Invested instead** page is off the router: `views/invested.py` and
+  `ledger/invest.py` still work and are still tested, but nothing links to the
+  page. Put its `st.Page` line back in `app.py` to bring it back.
 - PDF exports print `INR`/`USD` rather than `₹` — fpdf's core fonts are
   latin-1 and the glyph raises.
 - NVIDIA's endpoint has no speech-to-text, so there is no voice input.

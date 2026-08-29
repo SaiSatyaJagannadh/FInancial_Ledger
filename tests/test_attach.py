@@ -134,3 +134,80 @@ def test_corrupted_data_returns_none_rather_than_raising(monkeypatch):
     monkeypatch.setattr(store, "is_configured", lambda _s=None: True)
     monkeypatch.setattr(attach, "_sheet", lambda _s: FakeSheet())
     assert attach.get("sheet:abc", {"a": 1}) is None
+
+
+# --------------------------------------------- attaching to an entry already saved
+
+class _FakeStreamlit:
+    """Just enough of `st` to run the attachment field and see what it drew.
+
+    The real dialog cannot be opened from a test — `st.dialog` needs a click on
+    a row that demo data has no sheet row for — but the branch that matters is
+    plain Python: what is offered, and what comes back.
+    """
+
+    def __init__(self, *, checkbox=False, typed=None):
+        self.drawn: list[str] = []
+        self._checkbox = checkbox
+        self._typed = typed
+
+    def caption(self, text, **_kw):
+        self.drawn.append(f"caption:{text}")
+
+    def checkbox(self, label, **_kw):
+        self.drawn.append(f"checkbox:{label}")
+        return self._checkbox
+
+    def text_input(self, label, value="", **_kw):
+        self.drawn.append(f"text_input:{label}")
+        return self._typed if self._typed is not None else value
+
+    def file_uploader(self, label, **_kw):
+        self.drawn.append(f"file_uploader:{label}")
+        return None
+
+
+class _Row:
+    def __init__(self, attachment=""):
+        self.attachment = attachment
+        self.row = 5
+
+
+def _field(monkeypatch, row, **fake):
+    from ledger import ui
+
+    stub = _FakeStreamlit(**fake)
+    monkeypatch.setattr(ui, "st", stub)
+    return ui.attachment_field(row), stub
+
+
+def test_an_entry_with_nothing_attached_is_offered_an_upload(monkeypatch):
+    (kept, upload), stub = _field(monkeypatch, _Row())
+    assert kept == "" and upload is None
+    assert any(d.startswith("file_uploader:") for d in stub.drawn), (
+        "editing an entry must offer a file, not a box to paste a reference into"
+    )
+
+
+def test_a_stored_file_is_shown_rather_than_asked_for_again(monkeypatch):
+    """`sheet:ab12…` is this app's own bookkeeping. Nobody can retype it."""
+    (kept, _), stub = _field(monkeypatch, _Row("sheet:ab12cd"))
+    assert kept == "sheet:ab12cd", "the file must survive an edit that ignores it"
+    assert not any(d.startswith("text_input:") for d in stub.drawn)
+    assert any(d.startswith("file_uploader:") for d in stub.drawn)
+
+
+def test_a_stored_file_can_be_taken_off(monkeypatch):
+    (kept, _), _ = _field(monkeypatch, _Row("sheet:ab12cd"), checkbox=True)
+    assert kept == ""
+
+
+def test_a_pasted_link_stays_editable(monkeypatch):
+    """A statement kept in Drive is a real thing people have."""
+    (kept, _), stub = _field(
+        monkeypatch, _Row("https://example.com/a.pdf"),
+        typed="https://example.com/b.pdf",
+    )
+    assert kept == "https://example.com/b.pdf"
+    assert any(d.startswith("text_input:") for d in stub.drawn)
+    assert any(d.startswith("file_uploader:") for d in stub.drawn)

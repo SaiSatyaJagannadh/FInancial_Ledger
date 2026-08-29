@@ -200,32 +200,48 @@ def styles() -> None:
 _SOURCE_MARK = {"chat": "via chat", "image": "from image"}
 
 
-def entry_line(entry, *, show_attachment: bool = True) -> None:
-    """One ruled entry, written the way a khata writes it."""
-    from ledger.money import format_money
+def attachment_field(entry, key: str = "edit"):
+    """The attachment row of an edit form: what is there, and how to change it.
 
-    outgoing = entry.signed_minor > 0
-    st.markdown(
-        f'<div class="khata-row">'
-        f'<span class="khata-amount {"khata-out" if outgoing else "khata-back"}">'
-        f'{format_money(entry.amount_minor, entry.currency)}</span>'
-        f'<span class="khata-dir">{"gave" if outgoing else "got back"}</span>'
-        f'<span class="khata-who">{esc(entry.person)}</span>'
-        f'<span class="khata-meta">· {esc(entry.ledger)} · {entry.date:%d %b %Y}'
-        + (f" · {esc(entry.note)}" if entry.note else "")
-        + (f' · <span class="khata-src">{_SOURCE_MARK[entry.source]}</span>'
-           if entry.source in _SOURCE_MARK else "")
-        + "</span></div>",
-        unsafe_allow_html=True,
-    )
-    if show_attachment and entry.attachment:
-        href = safe_href(entry.attachment)
-        st.markdown(
-            f'<div class="khata-meta">📎 <a href="{esc(href)}" target="_blank" '
-            'rel="noopener noreferrer">statement</a></div>'
-            if href else '<div class="khata-meta">📎 attachment</div>',
-            unsafe_allow_html=True,
+    An upload, not a box to paste a reference into. `sheet:ab12…` is this app's
+    own bookkeeping, and asking someone to retype it was the only way to attach
+    a file to an entry that already existed — so photos went on at Add time or
+    never. A pasted http(s) link still works, because a statement kept in Drive
+    is a real thing people have.
+
+    Returns (attachment to save, uploaded file or None). The upload is *not*
+    stored here: this runs on every keystroke in the dialog, and putting the
+    file in the sheet on each of them would write it a dozen times.
+    """
+    from ledger import attach
+
+    current = str(entry.attachment or "")
+    kept = current
+
+    if current and attachment_is_stored(current):
+        # Named, not previewed. `attachment_button` reruns the app to fetch the
+        # file, and a rerun inside a dialog dismisses it — taking every field
+        # the person had just typed with it. The row in the list below previews
+        # it perfectly well, and that is one click away.
+        st.caption("📎 A file is attached, kept inside the sheet. Open it from the list.")
+        if st.checkbox("Remove this attachment", key=f"{key}drop_{entry.row}"):
+            kept = ""
+    else:
+        kept = st.text_input(
+            "Attachment link", value=current,
+            help="A link you keep elsewhere. Or upload a file below.",
         )
+
+    upload = st.file_uploader(
+        "Attach a statement, receipt or photo",
+        type=["pdf", "png", "jpg", "jpeg", "webp"],
+        key=f"{key}up_{entry.row}",
+        help=(
+            f"Kept inside the spreadsheet, up to {attach.MAX_BYTES // 1024} KB. "
+            "Replaces whatever is attached now."
+        ),
+    )
+    return kept, upload
 
 
 @st.dialog("Edit entry")
@@ -261,7 +277,7 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
         format_func=lambda c: f"{c.flag}  {c.label}", horizontal=True,
     )
     note = st.text_input("Note", value=entry.note)
-    attachment = st.text_input("Attachment link", value=entry.attachment)
+    attachment, upload = attachment_field(entry)
 
     problems: list[str] = []
     edited = None
@@ -281,7 +297,9 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
     for problem in problems:
         st.error(problem)
 
-    unchanged = edited is not None and edited.to_row() == entry.to_row()
+    # A picked file is a change even when every typed field is identical, so it
+    # counts here — otherwise Save stayed greyed out and the upload went nowhere.
+    unchanged = edited is not None and edited.to_row() == entry.to_row() and upload is None
     if unchanged:
         st.caption("Nothing changed yet.")
 
@@ -289,6 +307,16 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
     if save.button("Save changes", type="primary", width="stretch",
                    disabled=edited is None or unchanged):
         try:
+            if upload is not None:
+                # Store the file first: a row pointing at a file that never
+                # arrived is worse than failing before anything is written.
+                from ledger import attach
+
+                with st.spinner(f"Storing {upload.name}…"):
+                    edited = replace(edited, attachment=attach.put(
+                        upload.name, upload.getvalue(),
+                        upload.type or "application/octet-stream",
+                    ))
             store.update(entry, edited)
         except Exception as exc:  # noqa: BLE001 — show whatever the sheet said
             st.error(f"Could not save: {exc}")
@@ -596,27 +624,3 @@ def _remove_transaction(t, scope: str) -> None:
     if no.button("No", key=f"tno_{scope}_{t.row}", width="stretch"):
         st.session_state[armed] = False
         st.rerun()
-
-
-def entry_ledger(entries: list, scope: str, *, empty: str = "Nothing here yet.") -> None:
-    """A ruled list of entries, each with its own edit and delete."""
-    just = st.session_state.pop("just_edited", None)
-    if just:
-        st.success(f"Updated {just}.")
-
-    if not entries:
-        st.caption(empty)
-        return
-
-    people = sorted({e.person for e in entries})
-    ledgers = sorted({e.ledger for e in entries})
-
-    for entry in entries:
-        line, edit, remove = st.columns([8, 1.3, 1.3], vertical_alignment="center")
-        with line:
-            entry_line(entry)
-        with edit:
-            edit_control(entry, scope, people, ledgers)
-        with remove:
-            delete_control(entry, scope)
-        st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)

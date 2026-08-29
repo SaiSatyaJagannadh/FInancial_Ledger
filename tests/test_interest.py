@@ -7,6 +7,7 @@ money-never-through-a-float discipline as everywhere else.
 
 from __future__ import annotations
 
+import inspect
 import pathlib
 from datetime import date
 
@@ -316,20 +317,22 @@ class TestTheLedgerIsOnlyEverTouchedOnPurpose:
             "ledger is interest.ledger_entry()"
         )
 
-    def test_every_ledger_row_it_writes_is_built_by_the_named_helper(self):
-        """append() adds the row and update() corrects a standing one — the
-        second is what stops a re-save duplicating. Both must take their row
-        from ledger_entry(), so there is one place to read and one to test."""
-        writes = self.SOURCE.count("store.append(") + self.SOURCE.count("store.update(")
-        built = self.SOURCE.count("interest.ledger_entry(")
-        assert built >= 1, "the opt-in path has gone missing"
-        assert writes <= built * 2, (
-            f"{writes} ledger writes against {built} rows built by the helper"
-        )
+    def test_the_view_never_writes_to_the_ledger_itself(self):
+        """Both routes — the add form and the edit dialog — go through
+        `interest.sync_ledger_entry`, which decides append against correct and
+        which row is actually ours. A bare `store.append` in the view is how
+        the edit dialog used to duplicate a loan on a second tick."""
+        for forbidden in ("store.append(", "store.update("):
+            assert forbidden not in self.SOURCE, (
+                f"views/interest.py writes to the ledger directly with "
+                f"{forbidden!r} — it must call interest.sync_ledger_entry()"
+            )
 
     def test_it_looks_for_a_standing_entry_before_writing_one(self):
-        """The guard against the duplicate that reached the real sheet."""
-        assert "find_ledger_entry" in self.SOURCE
+        """The guard against the duplicate that reached the real sheet, and
+        against overwriting a loan this page did not write."""
+        assert "interest.sync_ledger_entry(" in self.SOURCE
+        assert "find_ledger_entry" in inspect.getsource(interest.sync_ledger_entry)
 
     def test_it_says_on_screen_that_interest_stays_out_of_the_ledger(self):
         """A rule the reader cannot see is a rule they will not trust."""
@@ -612,3 +615,114 @@ class TestMovedInterestIsCountedOnce:
     def test_a_row_written_before_the_column_existed_has_not_moved(self):
         old = ["2026-08-01", "Narayana", "15000", "INR", "0", "n", "manual"]
         assert interest.Charge.from_row(dict(zip(interest.COLUMNS, old))).moved_to == ""
+
+
+class TestAnOrdinaryLoanIsNeverMistakenForTheInterestRow:
+    """The bug this class exists for.
+
+    `find_ledger_entry` used to match on shape alone — person, ledger,
+    currency, date, direction. Money handed to Vihar on the first of the month
+    is *also* a "given" row for Vihar on that date, so saving Narayana's
+    interest a second time found that loan and `store.update` wrote the
+    interest figure over it. The loan was gone: the row still said "given", but
+    for the wrong amount, and nothing anywhere recorded the money actually lent.
+
+    The trail in the note is what says a row came from a charge, so that is
+    what is matched.
+    """
+
+    CHARGE = interest.Charge(date=date(2026, 7, 1), person="Narayana",
+                             amount_minor=15_000_00, kind=interest.Kind.given)
+
+    def loan(self, minor=2_00_000_00, when=date(2026, 7, 1), note="cash at home"):
+        """An entry typed by hand — same person, ledger, day and direction."""
+        return Entry(date=when, person="Vihar", ledger="VIHAR",
+                     direction=Direction.given, amount_minor=minor,
+                     currency=Currency.INR, note=note, row=12)
+
+    def test_a_hand_typed_loan_on_the_same_day_is_not_the_interest_row(self):
+        assert interest.find_ledger_entry(
+            [self.loan()], self.CHARGE, "Vihar", "VIHAR"
+        ) is None, "this loan would have been overwritten with the interest"
+
+    def test_a_loan_with_no_note_at_all_is_not_the_interest_row(self):
+        assert interest.find_ledger_entry(
+            [self.loan(note="")], self.CHARGE, "Vihar", "VIHAR"
+        ) is None
+
+    def test_a_note_that_merely_mentions_interest_is_not_enough(self):
+        assert interest.find_ledger_entry(
+            [self.loan(note="interest money, roughly")], self.CHARGE, "Vihar", "VIHAR"
+        ) is None
+
+    def test_the_row_this_bridge_wrote_is_still_found(self):
+        written = interest.ledger_entry(self.CHARGE, "Vihar", ledger="VIHAR")
+        assert interest.find_ledger_entry(
+            [self.loan(), written], self.CHARGE, "Vihar", "VIHAR"
+        ) is written
+
+    def test_it_is_found_among_the_loan_whichever_order_they_come_in(self):
+        written = interest.ledger_entry(self.CHARGE, "Vihar", ledger="VIHAR")
+        assert interest.find_ledger_entry(
+            [written, self.loan()], self.CHARGE, "Vihar", "VIHAR"
+        ) is written
+
+
+class TestSyncingTheOneLedgerRow:
+    """`sync_ledger_entry` — the single door from interest to the ledger.
+
+    Both the add form and the edit dialog come through it, so what it does to
+    the sheet is worth pinning down: append when there is nothing standing,
+    correct the row it wrote when the figure changed, and touch nothing at all
+    otherwise.
+    """
+
+    CHARGE = interest.Charge(date=date(2026, 7, 1), person="Narayana",
+                             amount_minor=15_000_00, kind=interest.Kind.given)
+
+    def sheet(self, monkeypatch):
+        from ledger import store
+
+        calls = {"append": [], "update": []}
+        monkeypatch.setattr(store, "append",
+                            lambda e, *_a, **_kw: calls["append"].append(e))
+        monkeypatch.setattr(store, "update",
+                            lambda o, n, *_a, **_kw: calls["update"].append((o, n)))
+        return calls
+
+    def loan(self):
+        return Entry(date=date(2026, 7, 1), person="Vihar", ledger="VIHAR",
+                     direction=Direction.given, amount_minor=2_00_000_00,
+                     currency=Currency.INR, note="cash at home", row=12)
+
+    def test_nothing_standing_means_one_new_row(self, monkeypatch):
+        calls = self.sheet(monkeypatch)
+        assert interest.sync_ledger_entry([], self.CHARGE, "Vihar", "VIHAR") == "added"
+        assert len(calls["append"]) == 1 and not calls["update"]
+        assert calls["append"][0].amount_minor == 15_000_00
+
+    def test_saving_the_same_charge_twice_writes_nothing_the_second_time(self, monkeypatch):
+        calls = self.sheet(monkeypatch)
+        written = interest.ledger_entry(self.CHARGE, "Vihar", ledger="VIHAR")
+        assert interest.sync_ledger_entry(
+            [written], self.CHARGE, "Vihar", "VIHAR") == "unchanged"
+        assert not calls["append"] and not calls["update"]
+
+    def test_a_corrected_figure_updates_the_row_it_wrote(self, monkeypatch):
+        calls = self.sheet(monkeypatch)
+        written = interest.ledger_entry(self.CHARGE, "Vihar", ledger="VIHAR")
+        bigger = interest.Charge(date=date(2026, 7, 1), person="Narayana",
+                                 amount_minor=20_000_00, kind=interest.Kind.given)
+        assert interest.sync_ledger_entry(
+            [written], bigger, "Vihar", "VIHAR") == "updated"
+        assert not calls["append"]
+        was, now = calls["update"][0]
+        assert was is written and now.amount_minor == 20_000_00
+
+    def test_a_hand_typed_loan_is_appended_beside_not_written_over(self, monkeypatch):
+        """The whole bug, end to end: the loan must survive the save."""
+        calls = self.sheet(monkeypatch)
+        assert interest.sync_ledger_entry(
+            [self.loan()], self.CHARGE, "Vihar", "VIHAR") == "added"
+        assert not calls["update"], "it overwrote a loan it did not write"
+        assert len(calls["append"]) == 1

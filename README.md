@@ -113,7 +113,6 @@ amounts, and there is no way to read that screen which is true.
 | **Edit entries** | Find a row by person, ledger, year or free text, then change or remove it |
 | **Assistant** | Say what happened, or upload a statement, and approve what it drafts |
 | **Spending** / **Add spending** | General expenses, deliberately kept out of the lending totals |
-| **Invested instead** | What the outstanding money would have earned in an FD |
 | **Download** | Excel, PDF, or a summary to send by WhatsApp or email |
 
 ## Layout
@@ -130,7 +129,7 @@ ledger/
   attach.py       the attachments tab — files, base64, across cells
   assistant.py    NVIDIA endpoint; drafts entries, never writes them
   docs.py         an upload turned into text or a right-sized image
-  invest.py       compounding, for "invested instead"
+  invest.py       compounding — the "Invested instead" page it feeds is off the router
   settle.py       clearing a balance to zero
   export.py       xlsx, PDF, shareable summary
   demo.py         deterministic sample data

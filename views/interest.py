@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ledger import attach, interest, people as grouping, store
+from ledger import attach, interest, people as grouping
 from ledger.compute import by_person
 from ledger.money import Currency, compact, format_money, to_minor
 from ledger.ui import (
-    attachment_button, attachment_is_stored, clear_cache, demo_banner,
-    load_ledger, safe_href, esc, styles,
+    attachment_button, attachment_field, attachment_is_stored, clear_cache,
+    demo_banner, load_ledger, safe_href, esc, styles,
 )
 
 styles()
@@ -193,25 +193,18 @@ if st.button("Save interest", type="primary",
         wrote = ""
         if to_ledger:
             # The only path from this page to the ledger, and it is here
-            # because the radio was set to it.
+            # because the radio was set to it. Saving the same charge twice
+            # must neither append a second loan nor overwrite an unrelated
+            # one — sync_ledger_entry is where both are decided.
             saved = interest.for_month(interest.load()[0], month, currency)[person]
-            fresh = interest.ledger_entry(
-                saved, taker, ledger=taker_ledger, note=purpose,
+            did = interest.sync_ledger_entry(
+                result.entries, saved, taker, taker_ledger, note=purpose,
             )
-            # Saving the same charge twice must not put a second identical
-            # loan in the ledger. It did, on the real sheet, and Vihar was
-            # shown owing fifteen thousand more than he does.
-            standing = interest.find_ledger_entry(
-                result.entries, saved, taker, taker_ledger
-            )
-            if standing is None:
-                store.append(fresh)
-                wrote = f" A ledger entry was written for {taker}."
-            elif standing.amount_minor != fresh.amount_minor:
-                store.update(standing, fresh)
-                wrote = f" {taker}'s ledger entry was updated to match."
-            else:
-                wrote = f" {taker} already has this in the ledger — left alone."
+            wrote = {
+                "added": f" A ledger entry was written for {taker}.",
+                "updated": f" {taker}'s ledger entry was updated to match.",
+                "unchanged": f" {taker} already has this in the ledger — left alone.",
+            }[did]
             interest.set_for_month(
                 person, month, minor, currency=currency, note=purpose.strip(),
                 kind=kind, attachment=link, moved_to=taker, source="manual",
@@ -324,8 +317,7 @@ def _edit(charge) -> None:
         format_func=lambda k: k.label, horizontal=True,
     )
     note = st.text_input("Purpose", value=charge.note)
-    link = st.text_input("Attachment reference", value=charge.attachment,
-                         help="Leave as it is unless you are clearing it.")
+    link, upload = attachment_field(charge, key="i")
 
     also = st.checkbox(
         "Someone else took this — add it to the main ledger",
@@ -357,11 +349,21 @@ def _edit(charge) -> None:
     if save.button("Save changes", type="primary", width="stretch",
                    disabled=edited is None or (also and not taker_now)):
         try:
+            if upload is not None:
+                # Stored first: a row pointing at a file that never arrived is
+                # worse than failing before anything is written.
+                with st.spinner(f"Storing {upload.name}…"):
+                    edited = replace(edited, attachment=attach.put(
+                        upload.name, upload.getvalue(),
+                        upload.type or "application/octet-stream",
+                    ))
             interest.replace_row(charge, edited)
             if also:
-                store.append(interest.ledger_entry(
-                    edited, taker_now, ledger=book_now, note=note,
-                ))
+                # Same guard as the add form: ticking this twice must not put
+                # a second loan in the ledger, nor land on a stranger's row.
+                interest.sync_ledger_entry(
+                    result.entries, edited, taker_now, book_now, note=note,
+                )
                 clear_cache()
         except Exception as exc:  # noqa: BLE001 — show what the sheet said
             st.error(f"Could not save: {exc}")
