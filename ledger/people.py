@@ -206,7 +206,7 @@ def set_parent(person: str, parent: str, secrets: dict | None = None) -> None:
     sheet = _sheet(secrets)
     was = current.get(person)
     if was is None:
-        sheet.append_row(member.to_row(), value_input_option="USER_ENTERED")
+        store.append_rows(sheet, [member.to_row()])
         return
 
     if not _matches(sheet.row_values(was.row), was):

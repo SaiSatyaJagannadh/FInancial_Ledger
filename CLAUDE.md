@@ -62,6 +62,20 @@ that would require inventing an exchange rate.
 
 ### Writing to the sheet
 
+**Every append goes through `store.append_rows`**, which sets
+`insert_data_option="INSERT_ROWS"`. Google's `values.append` defaults to
+OVERWRITE: it ends the table at the first wholly blank row and writes there,
+over whatever it finds. A one-row append survives that by luck — the gap is at
+least one row wide. `attach.put` writes one row per 40,000 characters of
+base64, and would have eaten the rows below a gap. Do not call `append_row` at
+a call site, for the same reason retrying does not belong at one.
+
+**A repayment is a second row, never an edit of the first.** The edit dialog
+offers "Add as a new entry" beside "Save changes", and leads with it when the
+Direction is what changed: flipping a "gave" row into a "got back" row erases
+the fact that the money was ever lent, so the ledger no longer holds both
+halves to reconcile.
+
 `store.delete` / `store.update` and their `spend` equivalents **re-read the row
 and confirm it still holds the expected entry before touching it.** Rows shift
 when anything above them is removed, and a stale row number would otherwise

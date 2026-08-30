@@ -310,7 +310,7 @@ def add(transaction: Transaction, secrets: dict | None = None) -> None:
     from ledger import store
 
     secrets = store._secrets() if secrets is None else secrets
-    _sheet(secrets).append_row(transaction.to_row(), value_input_option="USER_ENTERED")
+    store.append_rows(_sheet(secrets), [transaction.to_row()])
 
 
 def _matches(cells: list[str], transaction: Transaction) -> bool:

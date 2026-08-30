@@ -199,6 +199,10 @@ def styles() -> None:
 #: A short mark, not a sentence: the line is already dense.
 _SOURCE_MARK = {"chat": "via chat", "image": "from image"}
 
+#: The same words the Direction radio uses, so a warning about it reads as the
+#: control it is about rather than as the enum behind it.
+_DIRECTION_WORDS = {"given": "I gave them", "received": "They gave me back"}
+
 
 def attachment_field(entry, key: str = "edit"):
     """The attachment row of an edit form: what is there, and how to change it.
@@ -303,9 +307,24 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
     if unchanged:
         st.caption("Nothing changed yet.")
 
-    save, cancel = st.columns(2)
-    if save.button("Save changes", type="primary", width="stretch",
-                   disabled=edited is None or unchanged):
+    # Flipping Direction here is almost never a correction. "They gave it back"
+    # is a second thing that happened, and saving it over the row rewrites
+    # history so that the money was never lent at all: the ledger stops showing
+    # ₹2,00,000 went out and ₹2,00,000 came back, and shows only the return.
+    # So when the direction is the one thing that changed, the second button is
+    # the one that reads as what you meant, and it is the one on the left.
+    flipped = edited is not None and edited.direction is not entry.direction
+    if flipped:
+        st.warning(
+            f"You have changed this from *{_DIRECTION_WORDS[entry.direction]}* to "
+            f"*{_DIRECTION_WORDS[edited.direction]}*.\n\n"
+            "**Add as a new entry** keeps this row and records the other half "
+            "beside it — which is what a repayment is. **Save changes** replaces "
+            "this row, so the original is gone for good."
+        )
+
+    def write(append_instead: bool) -> None:
+        nonlocal edited
         try:
             if upload is not None:
                 # Store the file first: a row pointing at a file that never
@@ -317,13 +336,31 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
                         upload.name, upload.getvalue(),
                         upload.type or "application/octet-stream",
                     ))
-            store.update(entry, edited)
+            if append_instead:
+                store.append(replace(edited, row=None))
+            else:
+                store.update(entry, edited)
         except Exception as exc:  # noqa: BLE001 — show whatever the sheet said
             st.error(f"Could not save: {exc}")
         else:
             clear_cache()
-            st.session_state["just_edited"] = f"{edited.person} · {edited.date:%d %b %Y}"
+            st.session_state["just_edited"] = (
+                f"{edited.person} · {edited.date:%d %b %Y}"
+                + (" — added beside the original" if append_instead else "")
+            )
             st.rerun()
+
+    add, save, cancel = st.columns(3)
+    if add.button(
+        "Add as a new entry", type="primary" if flipped else "secondary",
+        width="stretch", disabled=edited is None,
+        help="Writes a second row and leaves this one exactly as it is.",
+    ):
+        write(append_instead=True)
+    if save.button("Save changes", type="primary" if not flipped else "secondary",
+                   width="stretch", disabled=edited is None or unchanged,
+                   help="Replaces this row. The original is not recoverable."):
+        write(append_instead=False)
     if cancel.button("Cancel", width="stretch"):
         st.rerun()
 

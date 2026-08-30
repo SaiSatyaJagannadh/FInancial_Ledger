@@ -139,3 +139,54 @@ def test_a_row_written_before_source_existed_reads_as_unknown():
 
     old = dict(zip(COLUMNS[:-2], make().to_row()[:-2]))
     assert Entry.from_row(old).source == ""
+
+
+class TestARepaymentIsASecondRowNotAnEdit:
+    """Editing a row to flip its Direction rewrites what happened.
+
+    The ledger's job is to hold both halves: ₹2,00,000 went out, and later some
+    came back. Turning the "gave" row into a "got back" row loses the first
+    half — the sheet then says the money was never lent, only returned, and
+    there is nothing left to reconcile against. So the edit dialog offers a
+    second route that appends instead, and points at it when the direction is
+    what changed.
+    """
+
+    SOURCE = __import__("inspect").getsource(
+        __import__("ledger.ui", fromlist=["ui"])._edit_dialog
+    )
+
+    def test_the_dialog_offers_a_route_that_appends(self):
+        assert "Add as a new entry" in self.SOURCE
+        assert "store.append(" in self.SOURCE
+
+    def test_the_appended_row_carries_no_row_number(self):
+        """A row number on an appended entry is a stale pointer at a stranger."""
+        assert "row=None" in self.SOURCE
+
+    def test_flipping_the_direction_is_pointed_out(self):
+        assert "flipped" in self.SOURCE
+
+    def test_both_halves_survive_when_the_repayment_is_appended(self, monkeypatch):
+        """The behaviour underneath: append leaves the loan alone."""
+        rows: list[list] = [[
+            "2026-08-27", "Narayana Rao D", "Nanna", "given", "200000.00",
+            "INR", "Inti owner uncle 2 lakhs amount", "", "manual",
+        ]]
+
+        class FakeSheet:
+            def row_values(self, _n):
+                return ["date"]
+
+            def append_rows(self, new, **_kw):
+                rows.extend(list(r) for r in new)
+
+        monkeypatch.setattr(store, "_open_worksheet", lambda _s, tab=None: FakeSheet())
+        lent = make(row=2, amount_minor=2_00_000_00, person="Narayana Rao D",
+                    ledger="Nanna")
+        store.append(replace(lent, direction=Direction.received,
+                             amount_minor=100, row=None), secrets=CONFIGURED)
+
+        assert len(rows) == 2
+        assert rows[0][3] == "given" and rows[0][4] == "200000.00"
+        assert rows[1][3] == "received"

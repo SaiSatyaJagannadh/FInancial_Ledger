@@ -512,7 +512,7 @@ def add(charge: Charge, secrets: dict | None = None) -> None:
     from ledger import store
 
     secrets = store._secrets() if secrets is None else secrets
-    _sheet(secrets).append_row(charge.to_row(), value_input_option="USER_ENTERED")
+    store.append_rows(_sheet(secrets), [charge.to_row()])
 
 
 def _matches(cells: list[str], charge: Charge) -> bool:

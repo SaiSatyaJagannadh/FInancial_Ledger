@@ -16,7 +16,17 @@ SECRETS = {
 
 
 class FakeSheet:
-    """Behaves like the slice of gspread.Worksheet the store uses."""
+    """Behaves like the slice of gspread.Worksheet the store uses.
+
+    `append_rows` copies Google, not the convenient fiction. `values.append`
+    does not mean "put this at the bottom": Sheets finds the table that starts
+    at the top of the tab, ends it at the first completely blank row, and then
+    `insertDataOption` decides what happens next — INSERT_ROWS opens a row,
+    and the default, OVERWRITE, writes straight over whatever is sitting there.
+
+    A fake that just did `self.rows.append(row)` was why the whole suite passed
+    while the real sheet lost an entry.
+    """
 
     def __init__(self, rows=None):
         self.header = list(COLUMNS)
@@ -28,8 +38,21 @@ class FakeSheet:
     def row_values(self, index):
         return self.header if index == 1 else []
 
-    def append_row(self, row, **_kwargs):
-        self.rows.append(list(row))
+    def _table_end(self) -> int:
+        """Where Sheets thinks the data stops: the first wholly blank row."""
+        for index, row in enumerate(self.rows):
+            if not any(str(cell).strip() for cell in row):
+                return index
+        return len(self.rows)
+
+    def append_rows(self, rows, insert_data_option=None, **_kwargs):
+        at = self._table_end()
+        for offset, row in enumerate(rows):
+            target = at + offset
+            if insert_data_option == "INSERT_ROWS" or target >= len(self.rows):
+                self.rows.insert(target, list(row))
+            else:
+                self.rows[target] = list(row)   # OVERWRITE — the row is gone
 
     def update(self, _cell, values):
         self.header = list(values[0])
@@ -172,3 +195,60 @@ def test_same_person_same_ledger_name_in_two_currencies_stays_separate(sheet):
     entries = store.load(secrets=SECRETS).entries
     assert totals(by_currency(entries, Currency.INR)).ledgers == 2   # House repair + Shared
     assert totals(by_currency(entries, Currency.USD)).ledgers == 1   # Shared, separately
+
+
+class TestAnAppendNeverLandsOnAnExistingRow:
+    """Google's `values.append` defaults `insertDataOption` to OVERWRITE.
+
+    Append does not mean "put this at the bottom": Sheets ends the table at the
+    first wholly blank row and writes there — over whatever it finds. A single
+    entry is safe by luck, because a gap is at least one row wide and one row
+    of new values fits inside it. A **multi-row** append is not: `attach.put`
+    writes one row per 40,000 characters of base64, so storing a receipt into a
+    tab with a blank row in it overwrites the rows below the gap.
+
+    Hand-edited sheets grow blank rows — `store.rows_to_entries` skips them,
+    which is the app admitting they happen.
+    """
+
+    KEEP = ["id7", "statement.pdf", "application/pdf", "9", "tail-of-the-file"]
+    BLANK = ["", "", "", "", ""]
+
+    def tab_with_a_gap(self):
+        return FakeSheet([["id1", "old.pdf", "application/pdf", "0", "AAAA"],
+                          self.BLANK, list(self.KEEP)])
+
+    def test_a_multi_row_append_would_destroy_what_is_below_the_gap(self):
+        """Guard the guard: with Google's default the rows really are gone."""
+        tab = self.tab_with_a_gap()
+        tab.append_rows([["new", "x", "y", str(i), "z"] for i in range(3)])
+        assert self.KEEP not in tab.rows
+
+    def test_asking_for_new_rows_keeps_every_one_of_them(self):
+        tab = self.tab_with_a_gap()
+        store.append_rows(tab, [["new", "x", "y", str(i), "z"] for i in range(3)],
+                          value_input_option="RAW")
+        assert self.KEEP in tab.rows
+
+    def test_a_single_entry_is_appended_not_written_over_anything(self):
+        tab = FakeSheet([["2026-08-10", "Narayana Rao D", "Nanna", "given",
+                          "85000.00", "INR", "", "", ""]])
+        store.append_rows(tab, [["2026-08-30", "Narayana Rao D", "Nanna",
+                                 "received", "1.00", "INR", "fdff", "", "manual"]])
+        assert len(tab.rows) == 2, "a repayment must never replace the loan"
+
+    def test_every_append_asks_for_a_new_row(self, monkeypatch):
+        asked = {}
+
+        class Recording(FakeSheet):
+            def append_rows(self, rows, insert_data_option=None, **kw):
+                asked["insert"] = insert_data_option
+                super().append_rows(rows, insert_data_option=insert_data_option, **kw)
+
+        monkeypatch.setattr(store, "_open_worksheet", lambda _s, tab=None: Recording())
+        store.append(
+            Entry(date=date(2026, 8, 30), person="Narayana Rao D", ledger="Nanna",
+                  direction=Direction.received, amount_minor=100, note="fdff"),
+            secrets=SECRETS,
+        )
+        assert asked["insert"] == "INSERT_ROWS"

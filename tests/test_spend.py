@@ -30,6 +30,7 @@ class FakeSheet:
         self.writes: list = []
         self.deleted: list[int] = []
         self.appended: list = []
+        self.options: list = []
 
     def row_values(self, n):
         return self.rows.get(n, [])
@@ -40,8 +41,9 @@ class FakeSheet:
     def delete_rows(self, n):
         self.deleted.append(n)
 
-    def append_row(self, row, **kw):
-        self.appended.append(row)
+    def append_rows(self, rows, **kw):
+        self.options.append(kw.get("insert_data_option"))
+        self.appended.extend(list(r) for r in rows)
 
 
 def wire(monkeypatch, rows) -> FakeSheet:

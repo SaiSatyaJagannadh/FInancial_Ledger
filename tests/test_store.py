@@ -139,8 +139,9 @@ def test_append_writes_the_row_in_column_order(monkeypatch):
         def row_values(self, _n):
             return list(COLUMNS)
 
-        def append_row(self, row, **kwargs):
-            written["row"] = row
+        def append_rows(self, rows, **kwargs):
+            written["row"] = rows[0]
+            written["insert"] = kwargs.get("insert_data_option")
 
     monkeypatch.setattr(store, "_open_worksheet", lambda _s: FakeSheet())
     entry = Entry(
@@ -163,8 +164,8 @@ def test_append_writes_a_header_to_an_empty_sheet(monkeypatch):
         def update(self, cell, values):
             calls["header"] = (cell, values)
 
-        def append_row(self, row, **kwargs):
-            calls["row"] = row
+        def append_rows(self, rows, **kwargs):
+            calls["row"] = rows[0]
 
     monkeypatch.setattr(store, "_open_worksheet", lambda _s: FakeSheet())
     store.append(

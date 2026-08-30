@@ -249,6 +249,39 @@ def _why(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+#: Google's `values.append` defaults `insertDataOption` to OVERWRITE. Append
+#: does not mean "put this at the bottom": Sheets ends the table at the first
+#: wholly blank row and writes the new values **there**, over whatever it finds.
+#: A one-row append survives that by luck — a gap is at least one row wide, so
+#: the values land in the blank. A **multi-row** append does not: `attach.put`
+#: writes one row per 40,000 characters of base64, so storing a receipt into a
+#: tab that has a blank row in it overwrites the rows below the gap. Blank rows
+#: happen; `rows_to_entries` skipping them is this app saying so.
+#:
+#: INSERT_ROWS makes Sheets open new rows instead, so an append can never land
+#: on an existing record. It may open them mid-sheet rather than at the end;
+#: row numbers below shift, which costs nothing here — every load recomputes
+#: them, and `update`/`delete` re-read and confirm the row still holds what they
+#: were given before touching it.
+INSERT_ROWS = "INSERT_ROWS"
+
+
+def append_rows(worksheet, rows: list[list], value_input_option: str = "USER_ENTERED") -> None:
+    """Add rows to a tab without ever writing over one already there.
+
+    **Every append this app makes — ledger, spending, interest, people,
+    attachments — goes through here**, for the same reason every read goes out
+    through one retrying HTTP client: the library default is wrong in a way
+    that silently loses somebody's record, and a call site that forgets is a
+    row nobody gets back. Do not call `append_row` directly.
+    """
+    worksheet.append_rows(
+        rows,
+        value_input_option=value_input_option,
+        insert_data_option=INSERT_ROWS,
+    )
+
+
 def append(entry: Entry, secrets: dict | None = None) -> None:
     """Append one entry to the sheet. Refuses in demo mode rather than pretending."""
     secrets = _secrets() if secrets is None else secrets
@@ -259,7 +292,7 @@ def append(entry: Entry, secrets: dict | None = None) -> None:
         )
     worksheet = _open_worksheet(secrets)
     _ensure_header(worksheet)
-    worksheet.append_row(entry.to_row(), value_input_option="USER_ENTERED")
+    append_rows(worksheet, [entry.to_row()])
 
 
 def delete(entry: Entry, secrets: dict | None = None) -> None:

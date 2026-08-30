@@ -84,7 +84,7 @@ def put(name: str, data: bytes, mimetype: str, secrets: dict | None = None) -> s
         [attachment_id, name, mimetype or "application/octet-stream", index, part]
         for index, part in enumerate(chunks(encoded))
     ]
-    sheet.append_rows(rows, value_input_option="RAW")
+    store.append_rows(sheet, rows, value_input_option="RAW")
     return reference_of(attachment_id)
 
 
