@@ -334,6 +334,31 @@ class TestTheLedgerIsOnlyEverTouchedOnPurpose:
         assert "interest.sync_ledger_entry(" in self.SOURCE
         assert "find_ledger_entry" in inspect.getsource(interest.sync_ledger_entry)
 
+    def test_every_route_to_the_ledger_also_marks_the_charge_as_moved(self):
+        """`moved_to` is what stops the money being counted twice.
+
+        `recorded_total` sums only charges with an empty `moved_to`, because a
+        charge handed on is a loan now and the ledger is counting it. The edit
+        dialog wrote the ledger row without setting it, so ₹15,000 sat in the
+        interest total *and* in somebody's balance at the same time.
+        """
+        writes = self.SOURCE.count("interest.sync_ledger_entry(")
+        marks = self.SOURCE.count("moved_to=taker")
+        assert writes >= 2, "both the add form and the edit dialog should be here"
+        assert marks >= writes, (
+            f"{writes} ledger writes but only {marks} of them record moved_to — "
+            "the difference is interest counted twice"
+        )
+
+    def test_the_edit_dialog_reuses_the_person_the_charge_went_to(self):
+        """The standing row is found by a trail carrying the taker's name.
+
+        Re-saving against whoever sorts first in the list builds a different
+        trail, matches nothing, and appends a second loan under someone who
+        never took the money.
+        """
+        assert "charge.moved_to" in self.SOURCE
+
     def test_it_says_on_screen_that_interest_stays_out_of_the_ledger(self):
         """A rule the reader cannot see is a rule they will not trust."""
         assert "ledger" in self.SOURCE and "Kept out of the ledger" in self.SOURCE

@@ -319,15 +319,25 @@ def _edit(charge) -> None:
     note = st.text_input("Purpose", value=charge.note)
     link, upload = attachment_field(charge, key="i")
 
+    # Already handed on? Then this comes up ticked and pointed at the same
+    # person, because the row in the ledger is matched by a trail carrying
+    # their name: re-saving against whoever happens to sort first would build a
+    # different trail, miss the standing row, and append a second loan under
+    # somebody who never took the money.
+    moved_already = charge.moved_to in everyone
     also = st.checkbox(
         "Someone else took this — add it to the main ledger",
-        help="Writes a ledger entry for the amount. Nothing is written unless "
-             "this is ticked.",
+        value=moved_already,
+        help="Writes a ledger entry for the amount, or corrects the one already "
+             "there. Nothing is written unless this is ticked.",
     )
     taker_now, book_now = "", ""
     if also:
         take, book = st.columns(2)
-        taker_now = take.selectbox("Who took it", everyone)
+        taker_now = take.selectbox(
+            "Who took it", everyone,
+            index=everyone.index(charge.moved_to) if moved_already else 0,
+        )
         book_now = book.selectbox("Onto which ledger", ledger_options(taker_now))
 
     edited, problems = None, []
@@ -348,29 +358,46 @@ def _edit(charge) -> None:
     save, cancel = st.columns(2)
     if save.button("Save changes", type="primary", width="stretch",
                    disabled=edited is None or (also and not taker_now)):
+        stored = f"istored_{charge.row}"
         try:
             if upload is not None:
                 # Stored first: a row pointing at a file that never arrived is
-                # worse than failing before anything is written.
-                with st.spinner(f"Storing {upload.name}…"):
-                    edited = replace(edited, attachment=attach.put(
-                        upload.name, upload.getvalue(),
-                        upload.type or "application/octet-stream",
-                    ))
+                # worse than failing before anything is written. Kept in session
+                # so a failure further down and a second click do not write a
+                # second ~70-cell copy and orphan the first.
+                if not st.session_state.get(stored):
+                    with st.spinner(f"Storing {upload.name}…"):
+                        st.session_state[stored] = attach.put(
+                            upload.name, upload.getvalue(),
+                            upload.type or "application/octet-stream",
+                        )
+                edited = replace(edited, attachment=st.session_state[stored])
+            if also:
+                # `moved_to` is what keeps this out of the interest total now
+                # that the ledger is counting it. Without it the same money is
+                # in both figures — which is the whole reason the column exists.
+                edited = replace(edited, moved_to=taker_now)
             interest.replace_row(charge, edited)
+            did = ""
             if also:
                 # Same guard as the add form: ticking this twice must not put
                 # a second loan in the ledger, nor land on a stranger's row.
-                interest.sync_ledger_entry(
+                did = interest.sync_ledger_entry(
                     result.entries, edited, taker_now, book_now, note=note,
                 )
                 clear_cache()
         except Exception as exc:  # noqa: BLE001 — show what the sheet said
             st.error(f"Could not save: {exc}")
         else:
+            st.session_state.pop(stored, None)
             st.session_state["interest_edited"] = (
                 f"{edited.person} · {edited.month_label}"
-                + (f" — and a ledger entry for {taker_now}" if also else "")
+                + {
+                    "": "",
+                    "added": f" — and a ledger entry for {taker_now}",
+                    "updated": f" — {taker_now}'s ledger entry was corrected to match",
+                    "unchanged": f" — {taker_now} already had this in the ledger",
+                }[did]
             )
             st.rerun()
     if cancel.button("Cancel", width="stretch"):

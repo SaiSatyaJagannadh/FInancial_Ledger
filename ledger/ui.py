@@ -323,19 +323,27 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
             "this row, so the original is gone for good."
         )
 
+    stored = f"stored_{entry.row}"
+
     def write(append_instead: bool) -> None:
         nonlocal edited
         try:
             if upload is not None:
                 # Store the file first: a row pointing at a file that never
                 # arrived is worse than failing before anything is written.
+                # Remembered across presses, because `store.update` refusing a
+                # shifted row is a thing that happens — and pressing Save again
+                # would otherwise write a second full copy of the file and leave
+                # the first with nothing referencing it.
                 from ledger import attach
 
-                with st.spinner(f"Storing {upload.name}…"):
-                    edited = replace(edited, attachment=attach.put(
-                        upload.name, upload.getvalue(),
-                        upload.type or "application/octet-stream",
-                    ))
+                if not st.session_state.get(stored):
+                    with st.spinner(f"Storing {upload.name}…"):
+                        st.session_state[stored] = attach.put(
+                            upload.name, upload.getvalue(),
+                            upload.type or "application/octet-stream",
+                        )
+                edited = replace(edited, attachment=st.session_state[stored])
             if append_instead:
                 store.append(replace(edited, row=None))
             else:
@@ -344,23 +352,28 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
             st.error(f"Could not save: {exc}")
         else:
             clear_cache()
+            st.session_state.pop(stored, None)
             st.session_state["just_edited"] = (
                 f"{edited.person} · {edited.date:%d %b %Y}"
                 + (" — added beside the original" if append_instead else "")
             )
             st.rerun()
 
-    add, save, cancel = st.columns(3)
-    if add.button(
-        "Add as a new entry", type="primary" if flipped else "secondary",
-        width="stretch", disabled=edited is None,
-        help="Writes a second row and leaves this one exactly as it is.",
-    ):
-        write(append_instead=True)
-    if save.button("Save changes", type="primary" if not flipped else "secondary",
+    # Save stays in the slot it has occupied since there were two buttons.
+    # Which one leads is said in colour, never by moving them under the cursor:
+    # the new button appends without undo, and a habit-click on a row somebody
+    # only opened to read would have doubled their balance.
+    save, add, cancel = st.columns(3)
+    if save.button("Save changes", type="secondary" if flipped else "primary",
                    width="stretch", disabled=edited is None or unchanged,
                    help="Replaces this row. The original is not recoverable."):
         write(append_instead=False)
+    if add.button(
+        "Add as a new entry", type="primary" if flipped else "secondary",
+        width="stretch", disabled=edited is None or unchanged,
+        help="Writes a second row and leaves this one exactly as it is.",
+    ):
+        write(append_instead=True)
     if cancel.button("Cancel", width="stretch"):
         st.rerun()
 
