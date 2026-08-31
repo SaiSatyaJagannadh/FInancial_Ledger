@@ -226,9 +226,10 @@ rather than pretending.
 
 ## Known state
 
-- The deployed app is **private**: an anonymous request to
-  `family-financialledger.streamlit.app` is redirected to
-  `share.streamlit.io/-/auth/app`, so viewers must sign in. There is still no
+- The deployed app is **private**: an anonymous request to either
+  `family-financialledger.streamlit.app` or
+  `saijagannadh-personal-ledger.streamlit.app` (both live, both this app) is
+  redirected to `share.streamlit.io/-/auth/app`, so viewers must sign in. There is still no
   authorisation *inside* the app — anyone who can open it can edit and delete
   every entry — so access is controlled entirely by Streamlit's sharing list.
 - The **Invested instead** page is off the router: `views/invested.py` and
