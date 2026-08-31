@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~500)
+.venv/bin/python -m pytest -q                     # all tests (~640)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -30,9 +30,15 @@ headlessly and curls it. That curl only renders the *default* page, so
 `tests/test_pages.py` runs every view through Streamlit's `AppTest` — a module
 shadowed by a local variable crashed one page while its own unit tests passed.
 
+**A fake worksheet must copy what Google does, not what would be convenient.**
+`FakeSheet.append_rows` in `tests/test_integration.py` reproduces the real
+table-detection and OVERWRITE behaviour; while it was a one-line
+`self.rows.append(row)` the whole suite passed over a write path that destroys
+rows on the real sheet. The same is true of the amount comparison below.
+
 ## Architecture
 
-**One Google Sheets workbook is the entire database.** Three tabs, three
+**One Google Sheets workbook is the entire database.** Five tabs, five
 modules, no SQL:
 
 | Tab | Module | Holds |
@@ -92,8 +98,8 @@ unavailable` at random. It says nothing about the sheet, the key or the data,
 and the same call succeeds a second later.
 
 `store._retrying_http_client()` subclasses gspread's `HTTPClient` and retries
-inside `request`. **Every read and write in the app — ledger, spending,
-attachments — goes out through that one method**, so this is the only place
+inside `request`. **Every read and write in the app — all five tabs — goes
+out through that one method**, so this is the only place
 retrying belongs; do not add it at a call site. 408/429/5xx are retried,
 4xx never (a revoked key will not pass on the fourth try). A dropped
 connection is retried **only for GET**: the reply to a lost POST may already
@@ -146,6 +152,21 @@ question of when, not if — and `would_cycle()` refuses one before it is saved.
 Vihar is recorded as having returned it and Chaitu as having taken it. A
 single "given" row under Chaitu would say more money left the house than
 actually did.
+
+### Answering questions (`ledger/facts.py`)
+
+**The model is asked only what code cannot answer.** `views/assistant.py` runs
+`facts.answer()` first; it returns `None` when the question is not one it
+recognises, and only then is the endpoint called. What Ravi owes, who owes the
+most, how much has gone out in total — all arithmetic, all already in
+`compute.py`, so it is exact and instant instead of a second and a half of a
+model that can be confidently wrong about a sum.
+
+**There are no embeddings here, and that is deliberate.** Retrieval finds the
+relevant part of a corpus too large for the context window; this corpus is a
+few dozen rows, roughly 700 tokens against 128,000. A vector store would add a
+round trip and then ask the model to add up the rows it got back — the exact
+arithmetic this module exists to avoid. Do not add one.
 
 ### The assistant (`ledger/assistant.py`)
 
@@ -206,13 +227,18 @@ rather than pretending.
 ## Known state
 
 - The deployed app is **private**: an anonymous request to
-  `saijagannadh-personal-ledger.streamlit.app` is redirected to
+  `family-financialledger.streamlit.app` is redirected to
   `share.streamlit.io/-/auth/app`, so viewers must sign in. There is still no
   authorisation *inside* the app — anyone who can open it can edit and delete
   every entry — so access is controlled entirely by Streamlit's sharing list.
 - The **Invested instead** page is off the router: `views/invested.py` and
   `ledger/invest.py` still work and are still tested, but nothing links to the
   page. Put its `st.Page` line back in `app.py` to bring it back.
+- `store.upload_attachment` (the Drive multipart POST) has **no callers**.
+  Attachments go into the `attachments` tab instead, for the reason above; the
+  function is the record of a route that does not work on a personal account.
+- `people.transfer_entries` has no caller either — the rule it encodes is
+  right, but no page offers a move-money-inside-a-group action yet.
 - PDF exports print `INR`/`USD` rather than `₹` — fpdf's core fonts are
   latin-1 and the glyph raises.
 - NVIDIA's endpoint has no speech-to-text, so there is no voice input.
