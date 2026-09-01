@@ -14,6 +14,10 @@ general shape that recurs, and the shape is what to watch for.
 
 For the commit-by-commit history, read `references/history.md`.
 
+The portable half of this — the rules with no FInancial_Ledger in them —
+lives in the user-level `money-app-engineering` skill, which loads in every
+project. This file is the version that knows where the code is.
+
 ## The shape of the thing
 
 A Streamlit app where **one Google Sheets workbook is the entire database** —
