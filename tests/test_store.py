@@ -161,8 +161,12 @@ def test_append_writes_a_header_to_an_empty_sheet(monkeypatch):
         def row_values(self, _n):
             return []
 
-        def update(self, cell, values):
-            calls["header"] = (cell, values)
+        def update(self, values=None, range_name=None, **kwargs):
+            # Signature copied from gspread 6 — values first, range second.
+            # This fake used to read (cell, values), which is gspread 5's order,
+            # so it accepted a call that writes the range string as the header
+            # and passed while the real sheet would not.
+            calls["header"] = (range_name, values)
 
         def append_rows(self, rows, **kwargs):
             calls["row"] = rows[0]

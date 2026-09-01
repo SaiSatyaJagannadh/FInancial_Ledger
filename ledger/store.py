@@ -457,4 +457,10 @@ def _ensure_header(worksheet) -> None:
     except Exception:
         first = []
     if not any(str(v).strip() for v in first):
-        worksheet.update("A1", [COLUMNS])
+        # Keyword arguments, not positional. gspread 6 reordered this to
+        # update(values, range_name), so update("A1", [COLUMNS]) writes the
+        # *string* "A1" as the values and passes a list as the range. Every
+        # other tab's header write already spells it out; this one did not, and
+        # only fires on a brand-new sheet, which is the one path a first-time
+        # user is guaranteed to take.
+        worksheet.update(values=[COLUMNS], range_name="A1")
