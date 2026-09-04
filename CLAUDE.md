@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~680)
+.venv/bin/python -m pytest -q                     # all tests (~700)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -13,8 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Several `ledger/` modules carry a `demo()` self-check runnable as
 `python -m ledger.<module>`: `assistant`, `attach`, `docs`, `export`, `invest`,
-`archive`, `auth`, `facts`, `interest`, `notify`, `people`, `settle`,
-`spend`. These assert the behaviour that is awkward to unit-test
+`accounts`, `archive`, `auth`, `facts`, `interest`, `notify`, `people`,
+`settle`, `spend`. These assert the behaviour that is awkward to unit-test
 (file round-trips, compounding maths, JSON parsing) and run in CI-adjacent
 fashion — keep them passing.
 
@@ -39,7 +39,7 @@ rows on the real sheet. The same is true of the amount comparison below.
 
 ## Architecture
 
-**One Google Sheets workbook is the entire database.** Six tabs, six
+**One Google Sheets workbook is the entire database.** Seven tabs, seven
 modules, no SQL:
 
 | Tab | Module | Holds |
@@ -50,6 +50,7 @@ modules, no SQL:
 | `interest` | `ledger/interest.py` | Monthly interest charges, **never** summed into the ledger |
 | `people` | `ledger/people.py` | Who rolls up under whom |
 | `deleted` | `ledger/archive.py` | Every removed row, and how to put it back |
+| `users` | `ledger/accounts.py` | Name/password accounts, when `[accounts]` is on |
 
 `store._open_worksheet(secrets, tab)` is the single door to the workbook; it
 creates a missing tab rather than raising.
@@ -276,6 +277,20 @@ working untouched.
 `auth.current_user()` is called from the write paths, where there may be no
 Streamlit runtime at all, so it swallows everything and returns `""`.
 Attribution is worth having; it is not worth failing a save for.
+
+**The second way in is `ledger/accounts.py`** — name, email and password in a
+`users` tab, behind `[accounts] enabled = true`. `gate()` prefers OIDC when
+both are set up. PBKDF2-HMAC-SHA256 at 600,000 iterations, a fresh salt per
+user, `hmac.compare_digest` for the comparison, and one message for both
+"no such address" and "wrong password" (telling them apart reveals who has an
+account). An unknown address still costs a hash so the two answers take the
+same time.
+
+**Its ceiling is structural and is not fixable here:** the hashes sit in the
+workbook, so anyone who can *edit* the sheet can add a user row or paste over a
+hash and sign in as somebody else. Sheet access is administrator access. That
+is why OIDC is preferred, and why the module says so at the top rather than
+leaving it to be discovered.
 
 ### Change emails (`ledger/notify.py`)
 

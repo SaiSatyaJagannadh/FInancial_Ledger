@@ -86,29 +86,129 @@ def permitted(email: str, secrets: dict | None = None) -> bool:
 
 
 def current_user() -> str:
-    """The signed-in address, or empty when there is no login configured.
+    """The signed-in address, whichever way they signed in, or empty.
 
     Called from the write paths, which also run under pytest with no Streamlit
     runtime at all, so every failure here is answered with "nobody" rather than
     an exception. Attribution is a nice-to-have; saving the row is not.
     """
     try:
-        if not configured():
-            return ""
-        if not st.user.is_logged_in:
-            return ""
-        return str(st.user.get("email") or "")
+        if configured():
+            return str(st.user.get("email") or "") if st.user.is_logged_in else ""
+        return str(st.session_state.get(SESSION) or "")
     except Exception:  # noqa: BLE001 — no runtime, no secrets, no session
         return ""
+
+
+#: Where a password sign-in is remembered. Session state only: it lasts as long
+#: as the browser tab and is gone on a refresh. A cookie would outlive that, but
+#: signing it needs a secret and getting that wrong is worse than signing in
+#: again.
+SESSION = "account_email"
+
+
+def signed_in_account():
+    """The `users`-tab account signed in on this session, if any."""
+    from ledger import accounts
+
+    email = st.session_state.get(SESSION)
+    if not email:
+        return None
+    known, _ = accounts.load()
+    return accounts.find(email, known)
+
+
+def _password_gate() -> None:
+    """Sign in or register against the `users` tab, then stop the page.
+
+    Renders in place of the app rather than as a page of its own, for the same
+    reason the OIDC gate does: the router is the only way in, and a login that
+    is itself a page is a login somebody can navigate around.
+    """
+    from ledger import accounts
+    from ledger.models import EntryError
+
+    if signed_in_account() is not None:
+        return
+
+    known, problems = accounts.load()
+    for problem in problems:
+        st.warning(problem)
+
+    st.title("Personal Ledger")
+    first_ever = not known
+    if first_ever:
+        st.info(
+            "No accounts yet. The first one created becomes yours — make it now, "
+            "before the app is shared with anybody."
+        )
+
+    sign_in, sign_up = st.tabs(["Sign in", "Create an account"])
+
+    with sign_in:
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
+        if st.button("Sign in", type="primary", key="login_go"):
+            account = accounts.authenticate(email, password)
+            if account is None:
+                # One message for both causes. Saying which was wrong tells a
+                # stranger whether an address has an account here.
+                st.error("Email or password is wrong.")
+            else:
+                st.session_state[SESSION] = account.email
+                st.rerun()
+
+    with sign_up:
+        code_wanted = accounts.signup_code()
+        if not code_wanted and not first_ever:
+            st.warning(
+                "Anyone who can open this page can create an account. Set "
+                "`signup_code` under `[accounts]` in secrets to require a word."
+            )
+        name = st.text_input("Name", key="signup_name")
+        new_email = st.text_input("Email", key="signup_email")
+        new_password = st.text_input(
+            f"Password (at least {accounts.MIN_PASSWORD} characters)",
+            type="password", key="signup_password",
+        )
+        confirm = st.text_input("Password again", type="password", key="signup_confirm")
+        code_given = st.text_input("Sign-up code", key="signup_code") if code_wanted else ""
+
+        if st.button("Create account", type="primary", key="signup_go"):
+            wrong = accounts.validate(name, new_email, new_password, confirm)
+            if code_wanted and code_given.strip() != code_wanted:
+                wrong.append("That sign-up code is not right.")
+            for problem in wrong:
+                st.error(problem)
+            if not wrong:
+                try:
+                    made = accounts.create(name, new_email, new_password)
+                except (EntryError, RuntimeError) as exc:
+                    st.error(str(exc))
+                except Exception as exc:  # noqa: BLE001 — say what the sheet said
+                    st.error(f"Could not create the account: {exc}")
+                else:
+                    st.session_state[SESSION] = made.email
+                    st.rerun()
+
+    st.stop()
 
 
 def gate() -> None:
     """Stop the page unless somebody permitted is signed in.
 
-    Does nothing when `[auth]` is absent, which is how the app behaved before
-    this existed and how it still behaves in demo mode and in the page tests.
+    Two ways in, and Google wins when both are set up: it stores no password
+    anywhere, while the `users` tab keeps hashes in the workbook where anyone
+    who can edit the sheet could add themselves a row.
+
+    Does nothing when neither is configured, which is how the app behaved before
+    any of this existed and how it still behaves in demo mode and the page tests.
     """
+    from ledger import accounts
+
     if not configured():
+        if accounts.enabled():
+            _password_gate()
         return
 
     if not st.user.is_logged_in:
@@ -140,13 +240,23 @@ def gate() -> None:
         st.stop()
 
 
+def _sign_out() -> None:
+    st.session_state.pop(SESSION, None)
+
+
 def sidebar_identity() -> None:
     """Say who is signed in, with a way out. Shown on every page by the router."""
-    if not configured() or not current_user():
+    if configured() and current_user():
+        with st.sidebar:
+            st.caption(f"Signed in as {current_user()}")
+            st.button("Sign out", width="stretch", on_click=st.logout)
         return
-    with st.sidebar:
-        st.caption(f"Signed in as {current_user()}")
-        st.button("Sign out", width="stretch", on_click=st.logout)
+
+    account = signed_in_account()
+    if account is not None:
+        with st.sidebar:
+            st.caption(f"Signed in as {account.name or account.email}")
+            st.button("Sign out", width="stretch", on_click=_sign_out)
 
 
 def demo() -> None:
