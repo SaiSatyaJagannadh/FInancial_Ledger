@@ -25,6 +25,7 @@ route a personal account has.
 
 from __future__ import annotations
 
+import pathlib
 import smtplib
 import sys
 import threading
@@ -292,5 +293,62 @@ def demo() -> None:
     print("ledger.notify: all checks passed")
 
 
+def selftest() -> int:
+    """Send one real message using whatever is in secrets. `-m ledger.notify --test`.
+
+    Exists so the person who pastes the app password can prove it works without
+    showing it to anybody — nothing here prints the credential, and the failure
+    messages name the cause rather than echoing the config.
+    """
+    import tomllib
+
+    path = pathlib.Path(".streamlit/secrets.toml")
+    if not path.exists():
+        print(f"No {path}. Copy {path}.example to it and fill in [notify].")
+        return 1
+    try:
+        secrets = tomllib.loads(path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        print(f"{path} is not valid TOML: {exc}")
+        return 1
+
+    config = settings(secrets)
+    if config is None:
+        print(
+            f"[notify] in {path} is incomplete — it needs both `to` and "
+            "`password`. Until both are set, change emails stay off."
+        )
+        return 1
+
+    # Say what will happen, without saying the password.
+    print(f"Sending a test message to {config['to']} "
+          f"via {config['host']}:{config['port']} as {config['user']}…")
+
+    _send(
+        "[Personal Ledger] Test message",
+        "If you are reading this, change emails are working.\n\n"
+        "From here on you will get one of these whenever an entry or an "
+        "interest charge is added, edited or deleted, saying which fields "
+        "changed and what they changed from and to.\n",
+        config,
+    )
+    if last_error():
+        print(f"\nFailed: {last_error()}")
+        if "Username and Password not accepted" in last_error():
+            print(
+                "\nThat is Gmail rejecting the credential. Two usual causes:\n"
+                "  · it is the account password, not an App Password\n"
+                "  · the App Password was revoked or belongs to another account\n"
+                "Generate a fresh one at myaccount.google.com/apppasswords."
+            )
+        return 1
+    print("\nSent. Check your inbox.")
+    return 0
+
+
 if __name__ == "__main__":
+    import sys
+
+    if "--test" in sys.argv:
+        raise SystemExit(selftest())
     demo()
