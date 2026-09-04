@@ -211,6 +211,57 @@ def for_month(charges: list[Charge], when: date,
     }
 
 
+def clone_month(charges: list[Charge], source: date, target: date,
+                currency: Currency = Currency.INR, *,
+                kind: Kind = Kind.due) -> tuple[list[Charge], list[str]]:
+    """The charges that would carry one month's interest into another.
+
+    Interest is usually the same arrangement month after month — the same
+    people, the same figures, the same reasons — so the alternative is retyping
+    every name every month, which is both dull and the sort of thing a person
+    eventually does wrong.
+
+    Returns `(to_write, already_there)`. Writing is the caller's decision, the
+    same shape as `settle.balancing_entries`, so the page can show what is
+    about to happen before anything is saved.
+
+    Three fields are deliberately **not** carried across:
+
+    - `moved_to`, because a copy has not been handed to anybody. Carrying it
+      would take the new charge out of the interest total *and* claim a ledger
+      entry that does not exist — the money would be counted nowhere.
+    - `attachment`, because August's receipt does not evidence September.
+    - `kind`, which starts as "still due": a month that has only just begun has
+      not been paid yet, whatever last month ended up as. `parse_kind` reads a
+      blank status the same way, for the same reason.
+
+    Anybody who already has a charge in the target month is skipped and named,
+    never overwritten. `set_for_month` is an upsert, so cloning on top of a
+    figure somebody had already corrected would silently undo that correction.
+    """
+    if month_start(source) == month_start(target):
+        return [], []
+
+    taken = set(for_month(charges, target, currency))
+    to_write, already_there = [], []
+    for charge in sorted(for_month(charges, source, currency).values(),
+                         key=lambda c: c.person):
+        if charge.person in taken:
+            already_there.append(charge.person)
+            continue
+        to_write.append(Charge(
+            date=month_start(target),
+            person=charge.person,
+            amount_minor=charge.amount_minor,
+            currency=charge.currency,
+            kind=kind,
+            rate_percent=charge.rate_percent,
+            note=charge.note,
+            source=charge.source or "manual",
+        ))
+    return to_write, already_there
+
+
 def set_for_month(person: str, when: date, amount_minor: int, *,
                   currency: Currency = Currency.INR, rate_percent: float = 0.0,
                   note: str = "", source: str = "manual",
@@ -640,6 +691,40 @@ def demo() -> None:
         pass
     else:  # pragma: no cover
         raise AssertionError("a zero charge must be refused")
+
+    # ------------------------------------------------ carrying a month forward
+    aug, sep = date(2026, 8, 1), date(2026, 9, 1)
+    book = [
+        Charge(date=aug, person="Chaitu", amount_minor=15_000_00, note="monthly",
+               kind=Kind.given, moved_to="Vihar", attachment="sheet:abc"),
+        Charge(date=aug, person="Sirisha", amount_minor=5_000_00, rate_percent=2.0),
+        Charge(date=aug, person="Vihar", amount_minor=7_000_00),
+        Charge(date=sep, person="Vihar", amount_minor=9_999_00),   # already set
+    ]
+    todo, already = clone_month(book, aug, sep, Currency.INR)
+
+    assert [c.person for c in todo] == ["Chaitu", "Sirisha"], [c.person for c in todo]
+    assert already == ["Vihar"], "somebody with September already must be left alone"
+    assert all(c.date == sep for c in todo)
+    assert [c.amount_minor for c in todo] == [15_000_00, 5_000_00], "figures carry"
+    assert todo[0].note == "monthly", "the reason carries"
+    assert todo[1].rate_percent == 2.0, "the rate carries"
+
+    # The three that must not carry, each for its own reason.
+    assert all(c.moved_to == "" for c in todo), "a copy has been handed to nobody"
+    assert all(c.attachment == "" for c in todo), "August's receipt is not September's"
+    assert all(c.kind is Kind.due for c in todo), "a month just begun is not paid"
+
+    # Cloning a month onto itself is a no-op, not a duplicate of everything.
+    assert clone_month(book, aug, aug, Currency.INR) == ([], [])
+
+    # Currencies never mix, here as everywhere.
+    dollars = [Charge(date=aug, person="Sam", amount_minor=4_000, currency=Currency.USD)]
+    assert clone_month(dollars, aug, sep, Currency.INR) == ([], [])
+    assert len(clone_month(dollars, aug, sep, Currency.USD)[0]) == 1
+
+    # Cloning twice adds nothing the second time — everyone is already there.
+    assert clone_month(book + todo, aug, sep, Currency.INR)[0] == []
 
     print("ledger.interest: all checks passed")
 

@@ -751,3 +751,97 @@ class TestSyncingTheOneLedgerRow:
             [self.loan()], self.CHARGE, "Vihar", "VIHAR") == "added"
         assert not calls["update"], "it overwrote a loan it did not write"
         assert len(calls["append"]) == 1
+
+
+class TestCarryingAMonthForward:
+    """`clone_month` — the same figures, into the next month, without retyping.
+
+    The dangerous parts are what it must *not* copy. A charge carries three
+    facts that belong to the month it came from, and carrying any of them into
+    a fresh month states something untrue about money.
+    """
+
+    AUG, SEP = date(2026, 8, 1), date(2026, 9, 1)
+
+    def book(self):
+        return [
+            interest.Charge(date=self.AUG, person="Chaitu", amount_minor=15_000_00,
+                            note="monthly", kind=interest.Kind.given,
+                            moved_to="Vihar", attachment="sheet:abc"),
+            interest.Charge(date=self.AUG, person="Sirisha", amount_minor=5_000_00,
+                            rate_percent=2.0),
+        ]
+
+    def cloned(self, extra=()):
+        return interest.clone_month(
+            self.book() + list(extra), self.AUG, self.SEP, Currency.INR
+        )
+
+    def test_everyone_from_the_source_month_is_carried(self):
+        todo, _ = self.cloned()
+        assert [c.person for c in todo] == ["Chaitu", "Sirisha"]
+        assert all(c.date == self.SEP for c in todo)
+
+    def test_the_figures_and_reasons_carry(self):
+        """The whole point: September is usually August again."""
+        todo, _ = self.cloned()
+        assert [c.amount_minor for c in todo] == [15_000_00, 5_000_00]
+        assert todo[0].note == "monthly"
+        assert todo[1].rate_percent == 2.0
+
+    def test_a_copy_is_never_marked_as_handed_to_anybody(self):
+        """`moved_to` says a ledger entry exists for this charge. For a copy
+        none does, and `recorded_total` would drop it from the interest total —
+        so the money would be counted in neither place."""
+        todo, _ = self.cloned()
+        assert all(c.moved_to == "" for c in todo)
+        assert interest.recorded_total(todo, Currency.INR) == 20_000_00
+
+    def test_a_copy_starts_still_due(self):
+        """August may have been paid. A month that has just begun has not."""
+        todo, _ = self.cloned()
+        assert all(c.kind is interest.Kind.due for c in todo)
+
+    def test_a_copy_carries_no_receipt(self):
+        """August's photo does not evidence September's charge."""
+        todo, _ = self.cloned()
+        assert all(c.attachment == "" for c in todo)
+
+    def test_somebody_who_already_has_that_month_is_skipped_not_overwritten(self):
+        """`set_for_month` is an upsert — copying over a corrected figure would
+        silently undo the correction."""
+        standing = interest.Charge(date=self.SEP, person="Chaitu",
+                                   amount_minor=9_999_00)
+        todo, already = self.cloned([standing])
+        assert already == ["Chaitu"]
+        assert [c.person for c in todo] == ["Sirisha"]
+
+    def test_copying_twice_creates_nothing_the_second_time(self):
+        todo, _ = self.cloned()
+        again, already = interest.clone_month(
+            self.book() + todo, self.AUG, self.SEP, Currency.INR)
+        assert again == []
+        assert sorted(already) == ["Chaitu", "Sirisha"]
+
+    def test_a_month_cannot_be_copied_onto_itself(self):
+        assert interest.clone_month(self.book(), self.AUG, self.AUG,
+                                    Currency.INR) == ([], [])
+
+    def test_currencies_never_mix(self):
+        dollars = [interest.Charge(date=self.AUG, person="Sam", amount_minor=4_000,
+                                   currency=Currency.USD)]
+        assert interest.clone_month(dollars, self.AUG, self.SEP, Currency.INR) == ([], [])
+        made, _ = interest.clone_month(dollars, self.AUG, self.SEP, Currency.USD)
+        assert len(made) == 1 and made[0].currency is Currency.USD
+
+    def test_an_empty_source_month_offers_nothing(self):
+        assert interest.clone_month([], self.AUG, self.SEP, Currency.INR) == ([], [])
+
+    def test_it_only_returns_what_would_be_written(self, monkeypatch):
+        """Like settle.balancing_entries: writing is the caller's decision, so
+        the page can show the list before anything reaches the sheet."""
+        monkeypatch.setattr(interest, "add",
+                            lambda *_a, **_kw: pytest.fail("must not write"))
+        monkeypatch.setattr(interest, "replace_row",
+                            lambda *_a, **_kw: pytest.fail("must not write"))
+        self.cloned()

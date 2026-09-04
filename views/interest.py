@@ -14,6 +14,8 @@ because the radio was set to it — never on its own.
 
 from __future__ import annotations
 
+from datetime import date
+
 import streamlit as st
 
 from ledger import attach, interest, people as grouping
@@ -223,6 +225,99 @@ if st.button("Save interest", type="primary",
             + wrote
         )
         st.rerun()
+
+st.divider()
+
+# ------------------------------------------------------------ carry a month on
+# Interest is the same arrangement most months — the same people, the same
+# figures — so the honest alternative to this is retyping every name every
+# month, which is dull and eventually gets a digit wrong.
+_months = interest.months_back(24)
+_have = sorted({c.month for c in charges if c.currency is currency}, reverse=True)
+
+if _have:
+    with st.expander("📋  Copy a whole month forward", expanded=False):
+        st.caption(
+            "Takes everybody who had interest in one month and writes the same "
+            "figures into another. Anyone who already has a charge in the target "
+            "month is left exactly as they are."
+        )
+
+        from_col, to_col = st.columns(2)
+        _labels = {f"{d:%Y-%m}": f"{d:%B %Y}" for d in _months}
+        source = from_col.selectbox(
+            "Copy from", _have, format_func=lambda m: _labels.get(m, m),
+            key=field("clone_from"),
+        )
+        _targets = [d for d in _months if f"{d:%Y-%m}" != source]
+        target = to_col.selectbox(
+            "Copy into", _targets, format_func=lambda d: f"{d:%B %Y}",
+            key=field("clone_to"),
+        )
+
+        _source_date = next(
+            (d for d in _months if f"{d:%Y-%m}" == source),
+            interest.month_start(date.today()),
+        )
+        todo, already = interest.clone_month(
+            charges, _source_date, target, currency
+        )
+
+        if not todo and not already:
+            st.info(f"Nothing recorded for {_labels.get(source, source)}.")
+        elif not todo:
+            st.success(
+                f"Everyone from {_labels.get(source, source)} already has a "
+                f"{target:%B %Y} charge — nothing to copy."
+            )
+        else:
+            total = sum(c.amount_minor for c in todo)
+            st.markdown(
+                f"**{len(todo)}** charge{'s' if len(todo) != 1 else ''} would be "
+                f"created for *{target:%B %Y}*, totalling "
+                f"**{format_money(total, currency)}**:"
+            )
+            for c in todo:
+                st.markdown(
+                    f"- **{esc(c.person)}** — {format_money(c.amount_minor, currency)}"
+                    + (f" · {esc(c.note)}" if c.note else "")
+                )
+            if already:
+                st.caption(
+                    "Left alone, because they already have a charge that month: "
+                    + ", ".join(already) + "."
+                )
+            st.caption(
+                "Copies start as **still due** and carry no receipt, and none is "
+                "marked as handed to anybody — those are facts about the month "
+                "they came from, not about this one."
+            )
+
+            if st.button(f"Create {len(todo)} charge"
+                         f"{'s' if len(todo) != 1 else ''} for {target:%B %Y}",
+                         type="primary", key=field("clone_go")):
+                made, failed = 0, []
+                for c in todo:
+                    try:
+                        interest.set_for_month(
+                            c.person, target, c.amount_minor, currency=currency,
+                            rate_percent=c.rate_percent, note=c.note,
+                            kind=c.kind, source="manual",
+                        )
+                    except Exception as exc:  # noqa: BLE001 — one bad row is not all of them
+                        failed.append(f"{c.person}: {exc}")
+                    else:
+                        made += 1
+                for problem in failed:
+                    st.error(problem)
+                if made:
+                    st.session_state["interest_round"] = ROUND + 1
+                    st.session_state["interest_saved"] = True
+                    st.session_state["interest_saved_text"] = (
+                        f"Copied {made} charge{'s' if made != 1 else ''} into "
+                        f"{target:%B %Y}."
+                    )
+                    st.rerun()
 
 st.divider()
 

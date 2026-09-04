@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~650)
+.venv/bin/python -m pytest -q                     # all tests (~665)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -132,6 +132,18 @@ cannot be told apart. `interest.suggest()` offers a figure (a month of the
 rate on what is *still owed*, not on what was first handed over) and the page
 lets it be overridden before saving, because the rate is usually an
 understanding rather than a contract.
+
+**Carrying a month forward** (`interest.clone_month`) writes last month's
+people and figures into a new month, because the arrangement rarely changes and
+retyping every name monthly is how a digit goes wrong. It returns what *would*
+be written and leaves saving to the caller, the same shape as
+`settle.balancing_entries`. Three fields deliberately do not carry: `moved_to`
+(a copy has been handed to nobody, and carrying it would drop the charge from
+the interest total while claiming a ledger row that does not exist — counted in
+neither place), `attachment` (August's receipt is not September's) and `kind`,
+which starts as still-due. Anyone who already has a charge that month is
+skipped and named — `set_for_month` is an upsert, so copying over a corrected
+figure would silently undo the correction.
 
 The one opt-in route from interest into the ledger goes through
 `interest.sync_ledger_entry()`, and the row it may correct is identified by the
