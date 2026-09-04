@@ -147,7 +147,7 @@ def load(secrets: dict | None = None) -> tuple[list[Account], list[str]]:
     if not store.is_configured(secrets):
         return [], []
     try:
-        rows = _sheet(secrets).get_all_records()
+        rows = store.records(_sheet(secrets), COLUMNS)
     except Exception as exc:  # noqa: BLE001 — an absent tab is not a crash
         return [], [f"Could not read the users tab: {type(exc).__name__}: {exc}"]
 

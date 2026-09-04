@@ -136,6 +136,12 @@ def _password_gate() -> None:
         st.warning(problem)
 
     st.title("Personal Ledger")
+    if st.session_state.pop("account_created", None):
+        st.success(
+            f"Account created for **{st.session_state.pop('account_created_email', '')}**. "
+            "Sign in with it below."
+        )
+
     first_ever = not known
     if first_ever:
         st.info(
@@ -188,7 +194,12 @@ def _password_gate() -> None:
                 except Exception as exc:  # noqa: BLE001 — say what the sheet said
                     st.error(f"Could not create the account: {exc}")
                 else:
-                    st.session_state[SESSION] = made.email
+                    # Registering is not signing in. Landing straight in the
+                    # app hides whether the password actually works — the first
+                    # time it gets typed should be now, while it is still in
+                    # mind, not on some later visit when it is not.
+                    st.session_state["account_created"] = True
+                    st.session_state["account_created_email"] = made.email
                     st.rerun()
 
     st.stop()

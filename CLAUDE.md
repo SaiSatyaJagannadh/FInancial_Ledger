@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~700)
+.venv/bin/python -m pytest -q                     # all tests (~705)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -54,6 +54,16 @@ modules, no SQL:
 
 `store._open_worksheet(secrets, tab)` is the single door to the workbook; it
 creates a missing tab rather than raising.
+
+**Read a tab with `store.records(sheet, COLUMNS)`, never a bare
+`get_all_records()`.** gspread refuses a header row containing duplicates, and
+blank headings are duplicates of each other — so *every tab this app creates
+for itself* is refused, because `_open_worksheet` makes them 20 columns wide
+and the modules write four or five headings in. `records()` passes
+`expected_headers`, which skips that check, and falls back to reading by
+position if the header is unreadable for any other reason. This shipped broken:
+`accounts.load` caught the refusal, reported no accounts, and every sign-in
+answered "email or password is wrong" without ever comparing a password.
 
 **Money is integer minor units (paise/cents) everywhere.** `ledger/money.py`
 owns parsing and formatting; a float must never reach the persistence

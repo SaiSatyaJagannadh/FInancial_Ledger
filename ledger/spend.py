@@ -271,7 +271,7 @@ def load(secrets: dict | None = None) -> tuple[list[Transaction], list[str]]:
         return [], []
     try:
         sheet = store._open_worksheet(secrets, WORKSHEET)
-        records = sheet.get_all_records()
+        records = store.records(sheet, COLUMNS)
     except Exception as exc:  # noqa: BLE001 — an unreachable sheet is not a crash
         return [], [f"Could not reach the transactions tab. {store._why(exc)}"]
 

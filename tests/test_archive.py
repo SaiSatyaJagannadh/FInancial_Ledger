@@ -149,7 +149,9 @@ def test_a_corrupted_row_costs_that_row_not_the_page():
 
 
 def test_rows_come_back_newest_first(monkeypatch):
-    def rows():
+    def rows(expected_headers=None):
+        # Signature copied from gspread: store.records passes expected_headers
+        # to skip the duplicate-header check that refuses a 20-column tab.
         return [
             {"deleted_at": "2026-09-01T10:00:00", "kind": archive.ENTRY,
              "by": "", "summary": "older", "source_row": "2", "data": "[]"},

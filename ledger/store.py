@@ -181,6 +181,34 @@ def _open_worksheet(secrets: dict, tab: str | None = None):
         return book.add_worksheet(title=name, rows=200, cols=20)
 
 
+def records(sheet, columns: list[str]) -> list[dict]:
+    """Every row of a tab as a dict keyed by `columns`.
+
+    **Not a bare `get_all_records()`.** gspread refuses a sheet whose header row
+    contains duplicates, and blank headings count as duplicates of each other —
+    so every tab this app creates for itself is refused, because
+    `_open_worksheet` makes them 20 columns wide and the modules write four or
+    five headings into them. The other fifteen are blank.
+
+    That is not hypothetical. It made every sign-in fail with "email or password
+    is wrong": `accounts.load` caught the refusal, reported no accounts, and the
+    password was never even compared.
+
+    `expected_headers` names the columns we want and skips the duplicate check.
+    If the header is unreadable for some other reason the values are read by
+    position instead, because a header is only a label — the row is positional,
+    and getting the data out beats showing somebody an empty page.
+    """
+    try:
+        return sheet.get_all_records(expected_headers=list(columns))
+    except Exception:  # noqa: BLE001 — fall back rather than fail the read
+        values = sheet.get_all_values()
+        return [
+            dict(zip(columns, list(row) + [""] * (len(columns) - len(row))))
+            for row in values[1:]
+        ]
+
+
 def load(secrets: dict | None = None) -> LoadResult:
     """Load every entry.
 

@@ -161,3 +161,85 @@ def test_it_is_off_unless_switched_on():
 def test_demo_mode_registers_nobody():
     with pytest.raises(RuntimeError, match="Demo mode"):
         accounts.create("A", "a@b.com", "longenough1", secrets={})
+
+
+class TestATabThisAppMadeItselfCanBeRead:
+    """The bug that made every sign-in say "email or password is wrong".
+
+    `store._open_worksheet` creates a missing tab 20 columns wide. The modules
+    write four or five headings into it, so the rest of the header row is blank
+    — and gspread refuses a header row containing duplicates, which blanks are.
+    `load` caught the refusal, reported no accounts, and the password was never
+    compared against anything.
+
+    It applies to every tab the app creates for itself, not just this one.
+    """
+
+    def tab(self):
+        from gspread.exceptions import GSpreadException
+
+        class TwentyColumns:
+            def __init__(self):
+                self.rows = []
+
+            def row_values(self, n):
+                return list(self.rows[n - 1]) if n <= len(self.rows) else []
+
+            def update(self, values=None, range_name=None, **kw):
+                head = [str(v) for v in values[0]] + [""] * (20 - len(values[0]))
+                self.rows.insert(0, head) if not self.rows else None
+                self.rows[0] = head
+
+            def append_rows(self, rows, **kw):
+                for r in rows:
+                    self.rows.append([str(c) for c in r] + [""] * (20 - len(r)))
+
+            def get_all_values(self):
+                return [list(r) for r in self.rows]
+
+            def get_all_records(self, expected_headers=None):
+                header = self.rows[0] if self.rows else []
+                dupes = [h for h in set(header) if header.count(h) > 1]
+                if expected_headers is None and dupes:
+                    raise GSpreadException(f"header contains duplicates: {dupes}")
+                return [dict(zip(header, r)) for r in self.rows[1:]]
+
+        return TwentyColumns()
+
+    @pytest.fixture()
+    def wired(self, monkeypatch):
+        from ledger import store
+
+        sheet = self.tab()
+        monkeypatch.setattr(store, "_open_worksheet",
+                            lambda _s, tab=None, **kw: sheet)
+        return sheet
+
+    def test_the_fake_really_does_refuse_a_bare_read(self, wired):
+        """Guard the guard: without the fix this tab is genuinely unreadable."""
+        from gspread.exceptions import GSpreadException
+
+        accounts.create("Ravi", "ravi@example.com", "longenough1",
+                        secrets=CONFIGURED)
+        with pytest.raises(GSpreadException):
+            wired.get_all_records()
+
+    def test_an_account_can_be_read_back_after_it_is_created(self, wired):
+        accounts.create("Ravi", "ravi@example.com", "longenough1",
+                        secrets=CONFIGURED)
+        known, problems = accounts.load(CONFIGURED)
+        assert problems == []
+        assert len(known) == 1 and known[0].email == "ravi@example.com"
+
+    def test_signing_in_works_with_the_password_just_set(self, wired):
+        """The user-visible bug, end to end."""
+        accounts.create("Ravi", "ravi@example.com", "longenough1",
+                        secrets=CONFIGURED)
+        assert accounts.authenticate("ravi@example.com", "longenough1",
+                                     secrets=CONFIGURED) is not None
+
+    def test_a_wrong_password_is_still_refused(self, wired):
+        accounts.create("Ravi", "ravi@example.com", "longenough1",
+                        secrets=CONFIGURED)
+        assert accounts.authenticate("ravi@example.com", "nope12345",
+                                     secrets=CONFIGURED) is None
