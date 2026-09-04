@@ -186,9 +186,19 @@ class TestATabThisAppMadeItselfCanBeRead:
                 return list(self.rows[n - 1]) if n <= len(self.rows) else []
 
             def update(self, values=None, range_name=None, **kw):
-                head = [str(v) for v in values[0]] + [""] * (20 - len(values[0]))
-                self.rows.insert(0, head) if not self.rows else None
-                self.rows[0] = head
+                # Honours range_name, because set_password writes one cell and a
+                # fake that always wrote the header would report a password
+                # change that never happened.
+                import re as _re
+
+                cell = _re.match(r"([A-Z]+)(\d+)", str(range_name or "A1"))
+                col = ord(cell.group(1)[0]) - 65 if cell else 0
+                row = int(cell.group(2)) - 1 if cell else 0
+                while len(self.rows) <= row:
+                    self.rows.append([""] * 20)
+                for r_off, line in enumerate(values):
+                    for c_off, value in enumerate(line):
+                        self.rows[row + r_off][col + c_off] = str(value)
 
             def append_rows(self, rows, **kw):
                 for r in rows:
@@ -243,3 +253,95 @@ class TestATabThisAppMadeItselfCanBeRead:
                         secrets=CONFIGURED)
         assert accounts.authenticate("ravi@example.com", "nope12345",
                                      secrets=CONFIGURED) is None
+
+
+class TestForgottenPassword:
+    """Getting back in after forgetting one.
+
+    Without this the app is a trap: sign-up refuses the address because it is
+    taken, and sign-in refuses the password because it is wrong, and the only
+    way out is editing the sheet by hand.
+    """
+
+    def wired(self, monkeypatch):
+        from ledger import store
+
+        sheet = TestATabThisAppMadeItselfCanBeRead().tab()
+        monkeypatch.setattr(store, "_open_worksheet",
+                            lambda _s, tab=None, **kw: sheet)
+        accounts.create("Ravi", "ravi@example.com", "oldpassword1",
+                        secrets=CONFIGURED)
+        return sheet
+
+    def test_a_new_password_replaces_the_old_one(self, monkeypatch):
+        self.wired(monkeypatch)
+        accounts.set_password("ravi@example.com", "brandnew123", secrets=CONFIGURED)
+        assert accounts.authenticate("ravi@example.com", "brandnew123",
+                                     secrets=CONFIGURED) is not None
+        assert accounts.authenticate("ravi@example.com", "oldpassword1",
+                                     secrets=CONFIGURED) is None
+
+    def test_only_that_persons_row_is_touched(self, monkeypatch):
+        self.wired(monkeypatch)
+        accounts.create("Sirisha", "sirisha@example.com", "hers12345",
+                        secrets=CONFIGURED)
+        accounts.set_password("ravi@example.com", "brandnew123", secrets=CONFIGURED)
+        assert accounts.authenticate("sirisha@example.com", "hers12345",
+                                     secrets=CONFIGURED) is not None
+
+    def test_a_short_new_password_is_refused_before_the_sheet_is_touched(self, monkeypatch):
+        self.wired(monkeypatch)
+        with pytest.raises(EntryError):
+            accounts.set_password("ravi@example.com", "short", secrets=CONFIGURED)
+        assert accounts.authenticate("ravi@example.com", "oldpassword1",
+                                     secrets=CONFIGURED) is not None, \
+            "the old password must still work after a refused change"
+
+    def test_an_unknown_address_cannot_have_a_password_set(self, monkeypatch):
+        self.wired(monkeypatch)
+        with pytest.raises(EntryError):
+            accounts.set_password("nobody@example.com", "brandnew123",
+                                  secrets=CONFIGURED)
+
+    def test_a_shifted_row_refuses_rather_than_writing_on_a_stranger(self, monkeypatch):
+        """Rows move. A password written onto the wrong row hands somebody
+        else's account away."""
+        sheet = self.wired(monkeypatch)
+        sheet.rows[1][0] = "someoneelse@example.com"     # the row moved under us
+        with pytest.raises((RuntimeError, EntryError)):
+            accounts.set_password("ravi@example.com", "brandnew123",
+                                  secrets=CONFIGURED)
+
+    def test_codes_are_six_digits_and_not_repeating(self):
+        codes = {accounts.reset_code() for _ in range(300)}
+        assert all(len(c) == 6 and c.isdigit() for c in codes)
+        assert len(codes) > 250, "a reset code that repeats is a guessable one"
+
+    def test_a_code_goes_to_the_account_address_not_a_typed_one(self, monkeypatch):
+        """Sending to whatever was typed in the form would mail a stranger the
+        key to somebody else's account."""
+        from ledger import notify
+
+        sent = {}
+        monkeypatch.setattr(notify, "settings",
+                            lambda *_a, **_kw: {"to": "owner@example.com",
+                                                "user": "u", "password": "p",
+                                                "host": "h", "port": 1})
+        monkeypatch.setattr(notify, "_send",
+                            lambda subject, body, config: sent.update(config=config,
+                                                                      body=body))
+        monkeypatch.setattr(notify, "last_error", lambda: "")
+        account = accounts.Account(email="ravi@example.com", name="Ravi",
+                                   password_hash="x", joined=date(2026, 9, 3))
+        assert accounts.send_reset_code(account, "123456", secrets=CONFIGURED) == ""
+        assert sent["config"]["to"] == "ravi@example.com"
+        assert "123456" in sent["body"]
+
+    def test_it_says_so_when_email_is_not_set_up(self, monkeypatch):
+        from ledger import notify
+
+        monkeypatch.setattr(notify, "settings", lambda *_a, **_kw: None)
+        account = accounts.Account(email="r@e.com", name="R", password_hash="x",
+                                   joined=date(2026, 9, 3))
+        problem = accounts.send_reset_code(account, "123456", secrets=CONFIGURED)
+        assert "not set up" in problem

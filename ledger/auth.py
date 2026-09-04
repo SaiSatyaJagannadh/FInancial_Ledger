@@ -149,7 +149,9 @@ def _password_gate() -> None:
             "before the app is shared with anybody."
         )
 
-    sign_in, sign_up = st.tabs(["Sign in", "Create an account"])
+    sign_in, sign_up, forgot = st.tabs(
+        ["Sign in", "Create an account", "Forgotten password"]
+    )
 
     with sign_in:
         email = st.text_input("Email", key="login_email")
@@ -189,7 +191,14 @@ def _password_gate() -> None:
             if not wrong:
                 try:
                     made = accounts.create(name, new_email, new_password)
-                except (EntryError, RuntimeError) as exc:
+                except EntryError as exc:
+                    st.error(str(exc))
+                    if "already an account" in str(exc):
+                        st.info(
+                            "If that account is yours and you have forgotten the "
+                            "password, use the **Forgotten password** tab above."
+                        )
+                except RuntimeError as exc:
                     st.error(str(exc))
                 except Exception as exc:  # noqa: BLE001 — say what the sheet said
                     st.error(f"Could not create the account: {exc}")
@@ -202,7 +211,114 @@ def _password_gate() -> None:
                     st.session_state["account_created_email"] = made.email
                     st.rerun()
 
+    with forgot:
+        _reset_form(known)
+
     st.stop()
+
+
+#: Where a pending reset lives while somebody goes to read their email. Session
+#: state, so the code never touches the sheet and dies with the browser tab.
+_RESET = "reset_pending"
+
+
+def _reset_form(known: list) -> None:
+    """Set a new password, having proved the account is yours.
+
+    Two ways to prove it, and the app uses the stronger one it has. A code
+    emailed to the address on the account proves control of that mailbox, which
+    is what a reset should require. Failing that, the shared sign-up code is
+    accepted — weaker, since everybody who can register knows it, but it is the
+    difference between a locked-out household and a support request.
+    """
+    from datetime import datetime, timedelta
+    from hmac import compare_digest
+
+    from ledger import accounts
+    from ledger.models import EntryError
+
+    can_email = accounts.settings_for_email_exists()
+    code_wanted = accounts.signup_code()
+
+    if not can_email and not code_wanted:
+        st.info(
+            "There is no way to verify a reset yet. Either add `[notify]` to "
+            "your secrets so a code can be emailed, or set `signup_code` under "
+            "`[accounts]`.\n\nUntil then, the way back in is to delete that "
+            "person's row from the **users** tab of the sheet and sign up again."
+        )
+        return
+
+    pending = st.session_state.get(_RESET) or {}
+
+    if not pending:
+        email = st.text_input("Your email", key="reset_email")
+        if st.button("Send me a code" if can_email else "Continue",
+                     type="primary", key="reset_start"):
+            account = accounts.find(email, known)
+            if account is None:
+                # Same non-answer as a failed sign-in: saying "no such account"
+                # tells a stranger who is registered here.
+                st.success(
+                    "If that address has an account, a code is on its way to it."
+                    if can_email else
+                    "If that address has an account, you can set a new password now."
+                )
+            else:
+                code = accounts.reset_code()
+                problem = accounts.send_reset_code(account, code) if can_email else ""
+                if problem:
+                    st.error(f"Could not send the code: {problem}")
+                else:
+                    st.session_state[_RESET] = {
+                        "email": account.email,
+                        "code": code,
+                        "until": (datetime.now()
+                                  + timedelta(minutes=accounts.RESET_MINUTES)).isoformat(),
+                        "left": accounts.RESET_ATTEMPTS,
+                    }
+                    st.rerun()
+        return
+
+    if datetime.now() > datetime.fromisoformat(pending["until"]):
+        st.session_state.pop(_RESET, None)
+        st.warning("That code has expired. Ask for another.")
+        return
+
+    st.caption(f"Setting a new password for **{pending['email']}**.")
+    given = st.text_input(
+        "Code from your email" if can_email else "Sign-up code", key="reset_code"
+    )
+    new = st.text_input(f"New password (at least {accounts.MIN_PASSWORD} characters)",
+                        type="password", key="reset_new")
+    again = st.text_input("New password again", type="password", key="reset_again")
+
+    change, cancel = st.columns(2)
+    if change.button("Set new password", type="primary", key="reset_go"):
+        wanted = pending["code"] if can_email else code_wanted
+        if not compare_digest(str(given).strip(), str(wanted)):
+            pending["left"] -= 1
+            if pending["left"] <= 0:
+                st.session_state.pop(_RESET, None)
+                st.error("Too many wrong codes. Start again.")
+            else:
+                st.session_state[_RESET] = pending
+                st.error(f"That code is not right. {pending['left']} tries left.")
+        elif new != again:
+            st.error("The two passwords do not match.")
+        else:
+            try:
+                accounts.set_password(pending["email"], new)
+            except (EntryError, RuntimeError) as exc:
+                st.error(str(exc))
+            else:
+                st.session_state.pop(_RESET, None)
+                st.session_state["account_created"] = True
+                st.session_state["account_created_email"] = pending["email"]
+                st.rerun()
+    if cancel.button("Cancel", key="reset_cancel"):
+        st.session_state.pop(_RESET, None)
+        st.rerun()
 
 
 def gate() -> None:

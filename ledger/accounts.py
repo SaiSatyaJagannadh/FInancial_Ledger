@@ -46,6 +46,14 @@ SALT_BYTES = 16
 #: Short passwords are the whole attack. Eight is a floor, not a blessing.
 MIN_PASSWORD = 8
 
+#: How long a reset code stays good. Long enough to go and read an email,
+#: short enough that one left in an inbox is not a spare key.
+RESET_MINUTES = 15
+
+#: Guesses allowed before a code is thrown away. Six digits is a million
+#: possibilities; five tries at it is nothing, five thousand is not.
+RESET_ATTEMPTS = 5
+
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
@@ -228,6 +236,95 @@ def authenticate(email: str, password: str,
     return account if verify(password, account.password_hash) else None
 
 
+def set_password(email: str, password: str, secrets: dict | None = None) -> Account:
+    """Give an existing account a new password.
+
+    Rewrites only the hash cell of that person's row, after re-reading it to
+    confirm it still holds the address we mean — rows shift here exactly as they
+    do in the ledger, and writing a password onto a stranger's row would hand
+    them somebody else's account.
+    """
+    from ledger import store
+
+    secrets = store._secrets() if secrets is None else secrets
+    if not store.is_configured(secrets):
+        raise RuntimeError("Demo mode: there is no sheet to change a password on.")
+
+    address = str(email or "").strip().lower()
+    known, _ = load(secrets)
+    account = find(address, known)
+    if account is None or account.row is None:
+        raise EntryError("There is no account for that email.")
+
+    fresh = hash_password(password)     # refuses a short one before touching the sheet
+    sheet = _sheet(secrets)
+    cells = sheet.row_values(account.row)
+    if not cells or str(cells[0]).strip().lower() != address:
+        raise RuntimeError(
+            f"Row {account.row} no longer holds that account — the users tab "
+            "changed since it was read. Try again."
+        )
+
+    column = store._column_letter(COLUMNS.index("password_hash") + 1)
+    sheet.update(values=[[fresh]],
+                 range_name=f"{column}{account.row}:{column}{account.row}",
+                 value_input_option="RAW")
+    return Account(email=account.email, name=account.name, password_hash=fresh,
+                   joined=account.joined, row=account.row)
+
+
+def settings_for_email_exists(secrets: dict | None = None) -> bool:
+    """Can a reset code actually be emailed? Reuses the change-email settings."""
+    from ledger import notify, store
+
+    secrets = store._secrets() if secrets is None else secrets
+    return notify.settings(secrets) is not None
+
+
+def reset_code() -> str:
+    """A six-digit one-time code, from the system's own randomness.
+
+    `secrets.randbelow`, not `random`: the latter is seeded predictably and its
+    output can be reconstructed from earlier draws, which for something that
+    stands in for a password is the whole game.
+    """
+    import secrets as _secrets
+
+    return f"{_secrets.randbelow(1_000_000):06d}"
+
+
+def send_reset_code(account: Account, code: str,
+                    secrets: dict | None = None) -> str:
+    """Email a reset code to the account's own address. Returns "" on success.
+
+    Sent to the address on the account, never to one typed into the form, so
+    the code only ever reaches whoever already controls that mailbox. Uses the
+    same SMTP settings the change emails use, so this needs no config of its
+    own — and says so plainly when there is none.
+    """
+    from ledger import notify, store
+
+    secrets = store._secrets() if secrets is None else secrets
+    config = notify.settings(secrets)
+    if config is None:
+        return (
+            "Email is not set up for this ledger, so a code cannot be sent. "
+            "Add [notify] to your secrets, or use the sign-up code instead."
+        )
+
+    to_them = dict(config)
+    to_them["to"] = account.email
+    notify._send(
+        "[Personal Ledger] Your password reset code",
+        f"Your reset code is {code}\n\n"
+        "It works once, in the browser tab you asked from, for the next "
+        f"{RESET_MINUTES} minutes. If you did not ask for it, ignore this — "
+        "nothing has changed on your account.\n",
+        to_them,
+    )
+    return notify.last_error()
+
+
 def _sheet(secrets: dict):
     from ledger import store
 
@@ -280,6 +377,11 @@ def demo() -> None:
     assert Account.from_row(dict(zip(COLUMNS, account.to_row()))) == account
     assert find("A@B.COM", [account]) is account, "lookup must ignore case"
     assert find("c@d.com", [account]) is None
+
+    # A reset code must be six digits and must not be predictable.
+    codes = {reset_code() for _ in range(200)}
+    assert all(len(c) == 6 and c.isdigit() for c in codes)
+    assert len(codes) > 150, "codes are repeating far too often"
 
     assert enabled({}) is False
     assert enabled({"accounts": {"enabled": True}}) is True

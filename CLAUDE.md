@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~705)
+.venv/bin/python -m pytest -q                     # all tests (~715)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -295,6 +295,17 @@ user, `hmac.compare_digest` for the comparison, and one message for both
 "no such address" and "wrong password" (telling them apart reveals who has an
 account). An unknown address still costs a hash so the two answers take the
 same time.
+
+**Forgotten passwords** go through a third tab on the same gate. A six-digit
+code is emailed to *the address on the account* — never one typed into the form
+— reusing the `[notify]` SMTP settings, so it needs no config of its own. The
+code lives in session state and dies with the browser tab; it never reaches the
+sheet. Fifteen minutes, five guesses, `compare_digest`. With no `[notify]` the
+shared `signup_code` is accepted instead, which is weaker (everyone who can
+register knows it) but is the difference between a locked-out household and a
+sheet edit. With neither, the page says to delete the row from the `users` tab.
+`accounts.set_password` re-reads the row and confirms it still holds that
+address before writing, the same guard the ledger uses.
 
 **Its ceiling is structural and is not fixable here:** the hashes sit in the
 workbook, so anyone who can *edit* the sheet can add a user row or paste over a
