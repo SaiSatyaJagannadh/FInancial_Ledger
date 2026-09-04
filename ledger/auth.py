@@ -154,9 +154,19 @@ def _password_gate() -> None:
     )
 
     with sign_in:
-        email = st.text_input("Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_password")
-        if st.button("Sign in", type="primary", key="login_go"):
+        # A form, not loose inputs and a button. A browser filling a saved
+        # password sets the field's value without firing the event Streamlit
+        # listens for, so a plain button submits whatever the widget held
+        # before — usually nothing, which is why an autofilled sign-in failed
+        # and typing the very same thing by hand worked. A form gathers its
+        # values at submit. It also makes Enter work, which is what anybody
+        # expects of a password box.
+        with st.form("sign_in_form"):
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password",
+                                     key="login_password")
+            submitted = st.form_submit_button("Sign in", type="primary")
+        if submitted:
             account = accounts.authenticate(email, password)
             if account is None:
                 # One message for both causes. Saying which was wrong tells a
@@ -173,16 +183,20 @@ def _password_gate() -> None:
                 "Anyone who can open this page can create an account. Set "
                 "`signup_code` under `[accounts]` in secrets to require a word."
             )
-        name = st.text_input("Name", key="signup_name")
-        new_email = st.text_input("Email", key="signup_email")
-        new_password = st.text_input(
-            f"Password (at least {accounts.MIN_PASSWORD} characters)",
-            type="password", key="signup_password",
-        )
-        confirm = st.text_input("Password again", type="password", key="signup_confirm")
-        code_given = st.text_input("Sign-up code", key="signup_code") if code_wanted else ""
+        with st.form("sign_up_form"):
+            name = st.text_input("Name", key="signup_name")
+            new_email = st.text_input("Email", key="signup_email")
+            new_password = st.text_input(
+                f"Password (at least {accounts.MIN_PASSWORD} characters)",
+                type="password", key="signup_password",
+            )
+            confirm = st.text_input("Password again", type="password",
+                                    key="signup_confirm")
+            code_given = (st.text_input("Sign-up code", key="signup_code")
+                          if code_wanted else "")
+            registering = st.form_submit_button("Create account", type="primary")
 
-        if st.button("Create account", type="primary", key="signup_go"):
+        if registering:
             wrong = accounts.validate(name, new_email, new_password, confirm)
             if code_wanted and code_given.strip() != code_wanted:
                 wrong.append("That sign-up code is not right.")
@@ -252,9 +266,12 @@ def _reset_form(known: list) -> None:
     pending = st.session_state.get(_RESET) or {}
 
     if not pending:
-        email = st.text_input("Your email", key="reset_email")
-        if st.button("Send me a code" if can_email else "Continue",
-                     type="primary", key="reset_start"):
+        with st.form("reset_start_form"):
+            email = st.text_input("Your email", key="reset_email")
+            asked = st.form_submit_button(
+                "Send me a code" if can_email else "Continue", type="primary"
+            )
+        if asked:
             account = accounts.find(email, known)
             if account is None:
                 # Same non-answer as a failed sign-in: saying "no such account"
@@ -286,15 +303,24 @@ def _reset_form(known: list) -> None:
         return
 
     st.caption(f"Setting a new password for **{pending['email']}**.")
-    given = st.text_input(
-        "Code from your email" if can_email else "Sign-up code", key="reset_code"
-    )
-    new = st.text_input(f"New password (at least {accounts.MIN_PASSWORD} characters)",
-                        type="password", key="reset_new")
-    again = st.text_input("New password again", type="password", key="reset_again")
+    with st.form("reset_finish_form"):
+        given = st.text_input(
+            "Code from your email" if can_email else "Sign-up code", key="reset_code"
+        )
+        new = st.text_input(
+            f"New password (at least {accounts.MIN_PASSWORD} characters)",
+            type="password", key="reset_new")
+        again = st.text_input("New password again", type="password", key="reset_again")
+        change_it, cancelled = st.columns(2)
+        with change_it:
+            changing = st.form_submit_button("Set new password", type="primary")
+        with cancelled:
+            giving_up = st.form_submit_button("Cancel")
 
-    change, cancel = st.columns(2)
-    if change.button("Set new password", type="primary", key="reset_go"):
+    if giving_up:
+        st.session_state.pop(_RESET, None)
+        st.rerun()
+    if changing:
         wanted = pending["code"] if can_email else code_wanted
         if not compare_digest(str(given).strip(), str(wanted)):
             pending["left"] -= 1
@@ -316,9 +342,7 @@ def _reset_form(known: list) -> None:
                 st.session_state["account_created"] = True
                 st.session_state["account_created_email"] = pending["email"]
                 st.rerun()
-    if cancel.button("Cancel", key="reset_cancel"):
-        st.session_state.pop(_RESET, None)
-        st.rerun()
+
 
 
 def gate() -> None:
@@ -368,7 +392,17 @@ def gate() -> None:
 
 
 def _sign_out() -> None:
-    st.session_state.pop(SESSION, None)
+    """Leave nothing behind, so the next run lands on the sign-in page.
+
+    Clearing only the session key left a half-filled reset and the typed email
+    sitting in state, so signing out and back in showed somebody the previous
+    person's address in the box.
+    """
+    for key in [SESSION, _RESET, "account_created", "account_created_email",
+                "login_email", "login_password", "signup_name", "signup_email",
+                "signup_password", "signup_confirm", "reset_email", "reset_code",
+                "reset_new", "reset_again"]:
+        st.session_state.pop(key, None)
 
 
 def sidebar_identity() -> None:
