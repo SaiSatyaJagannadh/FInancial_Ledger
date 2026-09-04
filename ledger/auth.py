@@ -48,22 +48,41 @@ def configured(secrets: dict | None = None) -> bool:
     return bool(section.get("redirect_uri") and section.get("cookie_secret"))
 
 
-def allowed_emails(secrets: dict | None = None) -> list[str]:
+def allowed_emails(secrets: dict | None = None) -> list[str] | None:
+    """The access list. `[]` means unrestricted; **None means unreadable**.
+
+    The distinction is the whole point. An earlier version answered a parse
+    failure with `[]`, and `[]` means "let everyone in" — so a typo in the
+    secrets file would have opened the ledger to anybody with a Google account,
+    silently. A list that cannot be read is a configuration the owner intended
+    and this code failed to honour, and the only safe reading of that is "let
+    nobody in until it is fixed".
+    """
     secrets = _secrets() if secrets is None else secrets
     section = secrets.get(SECTION) or {}
     try:
-        raw = dict(section).get(ALLOWED) or []
-    except Exception:  # noqa: BLE001
-        return []
+        raw = dict(section).get(ALLOWED)
+    except Exception:  # noqa: BLE001 — a section we cannot even read
+        return None
+    if raw is None:
+        return []                       # not set at all: unrestricted, and said so
     if isinstance(raw, str):
         raw = [part.strip() for part in raw.replace(",", " ").split()]
-    return [str(item).strip().lower() for item in raw if str(item).strip()]
+    try:
+        items = list(raw)               # a number, a bool, anything not iterable
+    except TypeError:
+        return None
+    return [str(item).strip().lower() for item in items if str(item).strip()]
 
 
 def permitted(email: str, secrets: dict | None = None) -> bool:
-    """An empty list lets everyone in — see ALLOWED for why that is announced."""
+    """Is this address allowed in? A broken list denies rather than admits."""
     allowed = allowed_emails(secrets)
-    return True if not allowed else str(email or "").strip().lower() in allowed
+    if allowed is None:
+        return False
+    if not allowed:
+        return True                     # deliberately unrestricted
+    return str(email or "").strip().lower() in allowed
 
 
 def current_user() -> str:
@@ -99,6 +118,18 @@ def gate() -> None:
         st.stop()
 
     email = str(st.user.get("email") or "")
+    if allowed_emails() is None:
+        # Locked, not refused — saying "you are not allowed" would send somebody
+        # chasing an access request when the file is what needs fixing.
+        st.title("Personal Ledger")
+        st.error(
+            "The access list in `[auth].allowed` cannot be read, so nobody is "
+            "being let in. It must be a list of addresses, for example "
+            '`allowed = ["you@gmail.com"]`.'
+        )
+        st.button("Sign out", on_click=st.logout)
+        st.stop()
+
     if not permitted(email):
         st.title("Personal Ledger")
         st.error(
@@ -127,6 +158,13 @@ def demo() -> None:
 
     both = {"auth": {"allowed": ["A@Example.com ", "b@example.com"]}}
     assert allowed_emails(both) == ["a@example.com", "b@example.com"]
+
+    # A list that cannot be read must lock the door, never open it. Answering
+    # this with [] would have meant "unrestricted", which is the wrong way to
+    # fail for the only thing standing between a stranger and the ledger.
+    for broken in (5, True, 3.4):
+        assert allowed_emails({"auth": {"allowed": broken}}) is None, broken
+        assert permitted("anyone@anywhere.com", {"auth": {"allowed": broken}}) is False
     # Hand-edited TOML: a plain string is what people actually type.
     assert allowed_emails({"auth": {"allowed": "a@x.com, b@x.com"}}) == \
         ["a@x.com", "b@x.com"]
