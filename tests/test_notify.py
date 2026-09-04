@@ -13,6 +13,7 @@ network.
 
 from __future__ import annotations
 
+import pathlib
 from datetime import date
 
 import pytest
@@ -206,3 +207,62 @@ def test_the_password_is_never_put_in_the_message():
                    secrets=WITH_NOTIFY,
                    sender=lambda s, b: seen.update(subject=s, body=b))
     assert "app-pw" not in seen["subject"] + seen["body"]
+
+
+class TestEverySheetWriteIsAnnounced:
+    """Coverage, checked against the source rather than remembered.
+
+    Six of fourteen write paths notified when this was first built — the ledger
+    and interest only. Spending, grouping and, more importantly, somebody
+    getting an account or changing a password all went out silently.
+    """
+
+    SOURCES = {
+        name: (pathlib.Path(__file__).resolve().parent.parent / "ledger" / name).read_text()
+        for name in ("store.py", "interest.py", "spend.py", "people.py",
+                     "accounts.py", "archive.py")
+    }
+
+    @pytest.mark.parametrize("module,expected", [
+        ("store.py", 3), ("interest.py", 3), ("spend.py", 3),
+        ("people.py", 3), ("accounts.py", 2), ("archive.py", 1),
+    ])
+    def test_the_module_announces_each_of_its_writes(self, module, expected):
+        source = self.SOURCES[module]
+        # Calls, not the definition — archive passes the kind as a variable.
+        calls = source.count("_announce(") - source.count("def _announce(")
+        assert calls >= expected, (
+            f"{module} announces {calls} writes, expected at least {expected}"
+        )
+
+    def test_a_password_hash_is_never_put_in_an_email(self):
+        """An inbox is the least private place this app can put anything."""
+        assert 'redact=("password_hash",)' in self.SOURCES["accounts.py"]
+
+    def test_the_redaction_actually_redacts(self):
+        class Row:
+            def __init__(self, secret):
+                self.person, self.amount_minor, self.currency = "R", 100, None
+                self.secret = secret
+
+            def to_row(self):
+                return ["R", self.secret]
+
+        lines = notify.describe(Row("hash-aaa"), Row("hash-bbb"),
+                                ["person", "password_hash"],
+                                redact=("password_hash",))
+        assert lines == ["password_hash: changed"]
+
+    def test_an_unredacted_diff_would_have_leaked_it(self):
+        """Guard the guard: without redact the hash really does go in."""
+        class Row:
+            def __init__(self, secret):
+                self.person, self.amount_minor, self.currency = "R", 100, None
+                self.secret = secret
+
+            def to_row(self):
+                return ["R", self.secret]
+
+        lines = notify.describe(Row("hash-aaa"), Row("hash-bbb"),
+                                ["person", "password_hash"])
+        assert "hash-bbb" in " ".join(lines)

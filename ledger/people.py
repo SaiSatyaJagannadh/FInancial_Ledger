@@ -207,7 +207,20 @@ def set_parent(person: str, parent: str, secrets: dict | None = None) -> None:
     was = current.get(person)
     if was is None:
         store.append_rows(sheet, [member.to_row()])
+        _announce("Grouping", "added", after=member, secrets=secrets)
         return
+
+def _announce(kind: str, action: str, *, before=None, after=None,
+              secrets: dict | None = None, redact: tuple = ()) -> None:
+    """Best-effort notice. A broken notifier must never undo a write."""
+    try:
+        from ledger import notify
+
+        notify.changed(kind, action, before=before, after=after,
+                       columns=COLUMNS, secrets=secrets, redact=redact)
+    except Exception:  # noqa: BLE001
+        pass
+
 
     if not _matches(sheet.row_values(was.row), was):
         raise RuntimeError(
@@ -220,6 +233,7 @@ def set_parent(person: str, parent: str, secrets: dict | None = None) -> None:
         values=[row], range_name=f"A{was.row}:{last}{was.row}",
         value_input_option="USER_ENTERED",
     )
+    _announce("Grouping", "edited", before=was, after=member, secrets=secrets)
 
 
 def _matches(cells: list[str], member: Member) -> bool:
@@ -242,6 +256,7 @@ def remove(person: str, secrets: dict | None = None) -> None:
             f"Row {was.row} no longer matches — reload and try again."
         )
     sheet.delete_rows(was.row)
+    _announce("Grouping", "deleted", before=was, secrets=secrets)
 
 
 # ------------------------------------------------------- moving money across

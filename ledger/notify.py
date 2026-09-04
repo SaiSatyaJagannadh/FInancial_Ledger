@@ -101,7 +101,8 @@ def _shown(record, column: str, raw: str) -> str:
     return raw or "—"
 
 
-def describe(before, after, columns: list[str]) -> list[str]:
+def describe(before, after, columns: list[str],
+             redact: tuple[str, ...] = ()) -> list[str]:
     """The fields that differ, as "name: old → new" lines.
 
     Built from `to_row()` so it works for an Entry and a Charge without knowing
@@ -115,6 +116,11 @@ def describe(before, after, columns: list[str]) -> list[str]:
         old = str(old_row[index]) if index < len(old_row) else ""
         new = str(new_row[index]) if index < len(new_row) else ""
         if old == new:
+            continue
+        if column in redact:
+            # A password hash is not evidence anybody needs in an inbox, and an
+            # email is the least private place this app can put anything.
+            lines.append(f"{column}: changed")
             continue
         if before is None:
             lines.append(f"{column}: {_shown(after, column, new)}")
@@ -133,9 +139,9 @@ def _subject(kind: str, action: str, record) -> str:
 
 
 def _body(kind: str, action: str, before, after, columns: list[str],
-          by: str = "") -> str:
+          by: str = "", redact: tuple[str, ...] = ()) -> str:
     record = after if after is not None else before
-    changes = describe(before, after, columns)
+    changes = describe(before, after, columns, redact)
 
     lines = [f"{kind} {action}.", ""]
     if by:
@@ -150,7 +156,8 @@ def _body(kind: str, action: str, before, after, columns: list[str],
             if column in changed_names:
                 continue
             row = after.to_row()
-            value = str(row[index]) if index < len(row) else ""
+            value = "changed" if column in redact else (
+                str(row[index]) if index < len(row) else "")
             if value:
                 lines.append(f"  {column}: {_shown(after, column, value)}")
     else:
@@ -194,7 +201,8 @@ def _send(subject: str, body: str, config: dict) -> None:
 
 def changed(kind: str, action: str, *, before=None, after=None,
             columns: list[str] | None = None, secrets: dict | None = None,
-            by: str | None = None, sender=None) -> bool:
+            by: str | None = None, redact: tuple[str, ...] = (),
+            sender=None) -> bool:
     """Announce one write. Returns whether a message was handed off to send.
 
     `sender` exists so the self-check and the tests can watch what would go out
@@ -219,7 +227,7 @@ def changed(kind: str, action: str, *, before=None, after=None,
         by = auth.current_user()
 
     subject = _subject(kind, action, record)
-    body = _body(kind, action, before, after, columns, by=by)
+    body = _body(kind, action, before, after, columns, by=by, redact=redact)
 
     if sender is not None:
         sender(subject, body)
@@ -289,6 +297,18 @@ def demo() -> None:
     changed("Ledger entry", "edited", before=before, after=after, secrets={},
             by="ravi@example.com", sender=lambda s, b: seen.update(body=b))
     assert "By: ravi@example.com" in seen["body"], seen["body"]
+
+    # A secret must never reach an inbox, whatever the diff says.
+    class Fake:
+        def __init__(self, secret):
+            self.person, self.amount_minor, self.currency = "R", 100, None
+            self._secret = secret
+        def to_row(self):
+            return ["R", self._secret]
+    lines = describe(Fake("hash-aaa"), Fake("hash-bbb"),
+                     ["person", "password_hash"], redact=("password_hash",))
+    assert lines == ["password_hash: changed"], lines
+    assert "hash-aaa" not in " ".join(lines) and "hash-bbb" not in " ".join(lines)
 
     print("ledger.notify: all checks passed")
 

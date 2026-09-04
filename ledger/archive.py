@@ -202,7 +202,23 @@ def restore(deletion: Deletion, secrets: dict | None = None):
         interest.add(record_, secrets)
 
     _forget(deletion, secrets)
+    _announce(deletion.kind, record_, secrets)
     return record_
+
+
+def _announce(kind: str, record_, secrets: dict | None) -> None:
+    """A record coming back is as worth hearing about as one going away."""
+    try:
+        from ledger import interest, notify
+        from ledger.models import COLUMNS as ENTRY_COLUMNS
+
+        notify.changed(
+            "Ledger entry" if kind == ENTRY else "Interest charge",
+            "restored", after=record_, secrets=secrets,
+            columns=ENTRY_COLUMNS if kind == ENTRY else interest.COLUMNS,
+        )
+    except Exception:  # noqa: BLE001 — a notice must never undo a write
+        pass
 
 
 def _forget(deletion: Deletion, secrets: dict) -> None:

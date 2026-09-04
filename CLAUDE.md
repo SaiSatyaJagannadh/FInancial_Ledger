@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~715)
+.venv/bin/python -m pytest -q                     # all tests (~725)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -335,6 +335,12 @@ Three rules hold it together:
   `notify._send` cannot raise.
 - **It sends on a background thread.** Gmail's handshake is 1–3 seconds and Add
   Entry is built for typing, saving and typing the next.
+- **Every write to the workbook is announced** — ledger, interest, spending,
+  grouping, account created, password changed, and a restore from the archive.
+  Fourteen paths; it was six until an audit found the gap, and the two that
+  matter most were the account ones, because those grant access rather than
+  record money. `accounts` passes `redact=("password_hash",)`: a hash in an
+  inbox is a hash somebody can work on offline at their leisure.
 - **It names the signer when there is one**, from `auth.current_user()`, and
   says nothing at all when there is not — it never guesses.
   `ui._notify_health` surfaces a failed send, because a notifier that has gone

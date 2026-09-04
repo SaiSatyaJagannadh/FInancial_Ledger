@@ -215,7 +215,28 @@ def create(name: str, email: str, password: str,
         joined=date.today(),
     )
     store.append_rows(_sheet(secrets), [account.to_row()], value_input_option="RAW")
+    _announce("Account", "added", after=account, secrets=secrets)
     return account
+
+
+def _announce(kind: str, action: str, *, before=None, after=None,
+              secrets: dict | None = None) -> None:
+    """Somebody getting an account, or changing a password, is worth hearing
+    about — it is the only kind of change here that grants access rather than
+    recording money.
+
+    `password_hash` is redacted, never sent. An inbox is the least private
+    place this app can put anything, and a hash in one is a hash somebody can
+    work on offline at their leisure.
+    """
+    try:
+        from ledger import notify
+
+        notify.changed(kind, action, before=before, after=after,
+                       columns=COLUMNS, secrets=secrets,
+                       redact=("password_hash",))
+    except Exception:  # noqa: BLE001 — a notice must never undo a write
+        pass
 
 
 def authenticate(email: str, password: str,
@@ -269,8 +290,12 @@ def set_password(email: str, password: str, secrets: dict | None = None) -> Acco
     sheet.update(values=[[fresh]],
                  range_name=f"{column}{account.row}:{column}{account.row}",
                  value_input_option="RAW")
-    return Account(email=account.email, name=account.name, password_hash=fresh,
-                   joined=account.joined, row=account.row)
+    changed_to = Account(email=account.email, name=account.name,
+                         password_hash=fresh, joined=account.joined,
+                         row=account.row)
+    _announce("Account password", "edited", before=account, after=changed_to,
+              secrets=secrets)
+    return changed_to
 
 
 def settings_for_email_exists(secrets: dict | None = None) -> bool:

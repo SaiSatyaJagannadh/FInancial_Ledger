@@ -311,6 +311,19 @@ def add(transaction: Transaction, secrets: dict | None = None) -> None:
 
     secrets = store._secrets() if secrets is None else secrets
     store.append_rows(_sheet(secrets), [transaction.to_row()])
+    _announce("Spending", "added", after=transaction, secrets=secrets)
+
+def _announce(kind: str, action: str, *, before=None, after=None,
+              secrets: dict | None = None, redact: tuple = ()) -> None:
+    """Best-effort notice. A broken notifier must never undo a write."""
+    try:
+        from ledger import notify
+
+        notify.changed(kind, action, before=before, after=after,
+                       columns=COLUMNS, secrets=secrets, redact=redact)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 
 def _matches(cells: list[str], transaction: Transaction) -> bool:
@@ -341,6 +354,7 @@ def remove(transaction: Transaction, secrets: dict | None = None) -> None:
             "it was loaded. Reload and try again."
         )
     sheet.delete_rows(transaction.row)
+    _announce("Spending", "deleted", before=transaction, secrets=secrets)
 
 
 def replace_row(original: Transaction, edited: Transaction, secrets: dict | None = None) -> None:
@@ -361,3 +375,4 @@ def replace_row(original: Transaction, edited: Transaction, secrets: dict | None
         values=[row], range_name=f"A{original.row}:{last}{original.row}",
         value_input_option="USER_ENTERED",
     )
+    _announce("Spending", "edited", before=original, after=edited, secrets=secrets)
