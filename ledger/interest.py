@@ -513,6 +513,25 @@ def add(charge: Charge, secrets: dict | None = None) -> None:
 
     secrets = store._secrets() if secrets is None else secrets
     store.append_rows(_sheet(secrets), [charge.to_row()])
+    _announce("Interest charge", "added", after=charge, secrets=secrets)
+
+
+def _announce(kind: str, action: str, *, before=None, after=None,
+              secrets: dict | None = None) -> None:
+    """Same best-effort notice the ledger sends, with this tab's columns.
+
+    Note that `set_for_month` on the hand-it-on path writes twice — once for the
+    figure, once to record who took it — so two notices arrive for that one
+    action. Both are true: they are two writes to the sheet, and the second
+    reads "moved_to: — → Vihar", which is the fact worth knowing.
+    """
+    try:
+        from ledger import notify
+
+        notify.changed(kind, action, before=before, after=after,
+                       columns=COLUMNS, secrets=secrets)
+    except Exception:  # noqa: BLE001 — never let a notice undo a save
+        pass
 
 
 def _matches(cells: list[str], charge: Charge) -> bool:
@@ -542,6 +561,7 @@ def remove(charge: Charge, secrets: dict | None = None) -> None:
             "was loaded. Reload and try again."
         )
     sheet.delete_rows(charge.row)
+    _announce("Interest charge", "deleted", before=charge, secrets=secrets)
 
 
 def replace_row(original: Charge, edited: Charge, secrets: dict | None = None) -> None:
@@ -562,6 +582,7 @@ def replace_row(original: Charge, edited: Charge, secrets: dict | None = None) -
         values=[row], range_name=f"A{original.row}:{last}{original.row}",
         value_input_option="USER_ENTERED",
     )
+    _announce("Interest charge", "edited", before=original, after=edited, secrets=secrets)
 
 
 def demo() -> None:

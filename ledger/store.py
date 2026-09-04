@@ -293,6 +293,7 @@ def append(entry: Entry, secrets: dict | None = None) -> None:
     worksheet = _open_worksheet(secrets)
     _ensure_header(worksheet)
     append_rows(worksheet, [entry.to_row()])
+    _announce("Ledger entry", "added", after=entry, secrets=secrets)
 
 
 def delete(entry: Entry, secrets: dict | None = None) -> None:
@@ -316,6 +317,7 @@ def delete(entry: Entry, secrets: dict | None = None) -> None:
             "since it was loaded. Reload and try again."
         )
     worksheet.delete_rows(entry.row)
+    _announce("Ledger entry", "deleted", before=entry, secrets=secrets)
 
 
 def update(original: Entry, edited: Entry, secrets: dict | None = None) -> None:
@@ -344,6 +346,24 @@ def update(original: Entry, edited: Entry, secrets: dict | None = None) -> None:
         values=[row], range_name=f"A{original.row}:{last}{original.row}",
         value_input_option="USER_ENTERED",
     )
+    _announce("Ledger entry", "edited", before=original, after=edited, secrets=secrets)
+
+
+def _announce(kind: str, action: str, *, before=None, after=None,
+              secrets: dict | None = None) -> None:
+    """Tell whoever is watching that the sheet changed.
+
+    Wrapped rather than called directly so that a broken notification can never
+    reach a caller. The row is already written by the time this runs; raising
+    here would show somebody an error about money they successfully saved.
+    """
+    try:
+        from ledger import notify
+
+        notify.changed(kind, action, before=before, after=after,
+                       columns=COLUMNS, secrets=secrets)
+    except Exception:  # noqa: BLE001 — never let a notice undo a save
+        pass
 
 
 def _column_letter(index: int) -> str:

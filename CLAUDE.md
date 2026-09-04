@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~640)
+.venv/bin/python -m pytest -q                     # all tests (~650)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Several `ledger/` modules carry a `demo()` self-check runnable as
 `python -m ledger.<module>`: `assistant`, `attach`, `docs`, `export`, `invest`,
-`facts`, `interest`, `people`, `settle`, `spend`. These assert the behaviour that is awkward to unit-test
+`auth`, `facts`, `interest`, `notify`, `people`, `settle`, `spend`. These assert the behaviour that is awkward to unit-test
 (file round-trips, compounding maths, JSON parsing) and run in CI-adjacent
 fashion — keep them passing.
 
@@ -224,14 +224,78 @@ Without credentials the app runs in demo mode against `ledger/demo.py` and says
 so. Demo mode is a supported path, not an error — `store` refuses writes there
 rather than pretending.
 
+### Who is signed in (`ledger/auth.py`)
+
+Streamlit's own OIDC login (`st.login` / `st.user`, 1.42+), gated in `app.py`
+before `st.navigation` — the router is the only way in, so a page cannot forget
+to check. **No passwords are stored anywhere.** A `users` tab was rejected
+deliberately: the workbook *is* the database, so hashes would sit where every
+shared viewer can read them and anyone who can edit the sheet could add
+themselves a row.
+
+```toml
+[auth]
+redirect_uri = "https://<app>.streamlit.app/oauth2callback"
+cookie_secret = "<a long random string>"
+client_id = "<from Google Cloud console>"
+client_secret = "<from Google Cloud console>"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+allowed = ["you@gmail.com", "someone@gmail.com"]   # empty list = anyone Google verifies
+```
+
+**Absent `[auth]` means the app runs open, exactly as before.** `st.user` raises
+without that section, so `auth.configured()` is checked first and every helper
+answers "nobody" rather than throwing — which is what keeps demo mode and
+`tests/test_pages.py` (which run views directly, not through the router)
+working untouched.
+
+`auth.current_user()` is called from the write paths, where there may be no
+Streamlit runtime at all, so it swallows everything and returns `""`.
+Attribution is worth having; it is not worth failing a save for.
+
+### Change emails (`ledger/notify.py`)
+
+Every write to `entries` and `interest` emails a note saying what changed.
+**Off unless `[notify]` names both a recipient and a password** — that absence
+is what keeps the whole test suite and every demo run off the network, so do
+not give `settings()` a default that is truthy.
+
+```toml
+[notify]
+to = "you@example.com"
+password = "abcd efgh ijkl mnop"   # a Gmail App Password, not the account one
+# user/host/port default to `to`, smtp.gmail.com, 587
+```
+
+Three rules hold it together:
+
+- **A failed notice never fails a save.** The row is already in the sheet;
+  raising afterwards would show somebody an error about money they successfully
+  recorded. `store._announce` / `interest._announce` swallow everything, and
+  `notify._send` cannot raise.
+- **It sends on a background thread.** Gmail's handshake is 1–3 seconds and Add
+  Entry is built for typing, saving and typing the next.
+- **It names the signer when there is one**, from `auth.current_user()`, and
+  says nothing at all when there is not — it never guesses.
+  `ui._notify_health` surfaces a failed send, because a notifier that has gone
+  quiet is indistinguishable from nothing having changed.
+
+A service account cannot send as you — the Gmail API needs domain-wide
+delegation, Workspace-only, the same wall as Drive in `attach.py`. Plain SMTP
+with an app password is the one route a personal account has.
+
+Note `set_for_month` writes twice on the hand-it-on path, so that action sends
+two notices. Both are true; the second reads `moved_to: — → Vihar`.
+
 ## Known state
 
 - The deployed app is **private**: an anonymous request to either
   `family-financialledger.streamlit.app` or
   `saijagannadh-personal-ledger.streamlit.app` (both live, both this app) is
-  redirected to `share.streamlit.io/-/auth/app`, so viewers must sign in. There is still no
-  authorisation *inside* the app — anyone who can open it can edit and delete
-  every entry — so access is controlled entirely by Streamlit's sharing list.
+  redirected to `share.streamlit.io/-/auth/app`, so viewers must sign in.
+  Authorisation *inside* the app now exists too, but only when `[auth]` is
+  configured — see below. Without it the app is still open to anyone who can
+  open it, and Streamlit's sharing list is the only gate.
 - The **Invested instead** page is off the router: `views/invested.py` and
   `ledger/invest.py` still work and are still tested, but nothing links to the
   page. Put its `st.Page` line back in `app.py` to bring it back.

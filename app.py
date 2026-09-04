@@ -11,6 +11,15 @@ import streamlit as st
 
 st.set_page_config(page_title="Personal Ledger", page_icon="₹", layout="wide")
 
+# Sign-in goes here, before any page is constructed, because this is the only
+# way into the app — every view is reached through this router. A page that
+# gated itself would be one `st.Page` line away from being forgotten. Does
+# nothing at all when [auth] is absent, which is demo mode and the page tests.
+from ledger import auth  # noqa: E402 — must follow set_page_config
+
+auth.gate()
+auth.sidebar_identity()
+
 st.navigation([
     st.Page("views/dashboard.py", title="Ledger", icon=":material/menu_book:", default=True),
     st.Page("views/add_entry.py", title="Add entry", icon=":material/add:"),

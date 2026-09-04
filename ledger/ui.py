@@ -131,6 +131,7 @@ def demo_banner(result: store.LoadResult) -> None:
             with st.expander(f"⚠️ {len(result.problems)} row(s) could not be read"):
                 for problem in result.problems:
                     st.write(f"- {problem}")
+        _notify_health()
         return
 
     st.warning(
@@ -138,6 +139,24 @@ def demo_banner(result: store.LoadResult) -> None:
         "`.streamlit/secrets.toml` to connect your real Google Sheet.",
         icon="⚠️",
     )
+
+
+def _notify_health() -> None:
+    """Say so when change emails have stopped going out.
+
+    Silence from a notifier is indistinguishable from "nothing has changed",
+    which is the reading that makes it dangerous — the whole reason to have it
+    is to be told. A failed send never interrupts a save, so this line is the
+    only place the failure can surface.
+    """
+    from ledger import notify
+
+    problem = notify.last_error()
+    if problem:
+        st.caption(
+            f"✉️ Change emails are not going out — {esc(problem)}. "
+            "Your entries are saved; only the notification failed."
+        )
 
 
 def page_config(title: str) -> None:
