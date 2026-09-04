@@ -611,6 +611,9 @@ def remove(charge: Charge, secrets: dict | None = None) -> None:
             f"Row {charge.row} no longer matches — the sheet changed since it "
             "was loaded. Reload and try again."
         )
+    from ledger import archive
+
+    archive.record(archive.INTEREST, charge, secrets)   # before, for the same reason
     sheet.delete_rows(charge.row)
     _announce("Interest charge", "deleted", before=charge, secrets=secrets)
 

@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~665)
+.venv/bin/python -m pytest -q                     # all tests (~680)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -13,7 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Several `ledger/` modules carry a `demo()` self-check runnable as
 `python -m ledger.<module>`: `assistant`, `attach`, `docs`, `export`, `invest`,
-`auth`, `facts`, `interest`, `notify`, `people`, `settle`, `spend`. These assert the behaviour that is awkward to unit-test
+`archive`, `auth`, `facts`, `interest`, `notify`, `people`, `settle`,
+`spend`. These assert the behaviour that is awkward to unit-test
 (file round-trips, compounding maths, JSON parsing) and run in CI-adjacent
 fashion — keep them passing.
 
@@ -38,7 +39,7 @@ rows on the real sheet. The same is true of the amount comparison below.
 
 ## Architecture
 
-**One Google Sheets workbook is the entire database.** Five tabs, five
+**One Google Sheets workbook is the entire database.** Six tabs, six
 modules, no SQL:
 
 | Tab | Module | Holds |
@@ -48,6 +49,7 @@ modules, no SQL:
 | `attachments` | `ledger/attach.py` | Uploaded files, base64 across cells |
 | `interest` | `ledger/interest.py` | Monthly interest charges, **never** summed into the ledger |
 | `people` | `ledger/people.py` | Who rolls up under whom |
+| `deleted` | `ledger/archive.py` | Every removed row, and how to put it back |
 
 `store._open_worksheet(secrets, tab)` is the single door to the workbook; it
 creates a missing tab rather than raising.
@@ -81,6 +83,16 @@ offers "Add as a new entry" beside "Save changes", and leads with it when the
 Direction is what changed: flipping a "gave" row into a "got back" row erases
 the fact that the money was ever lent, so the ledger no longer holds both
 halves to reconcile.
+
+**A deletion is archived before the row goes, and a failed archive stops it**
+(`ledger/archive.py`). This is the exact opposite of how `notify` is treated,
+and deliberately: a notification that fails costs a message, a deletion that
+fails to archive costs the record. The `deleted` tab keeps the original cells
+as JSON in one column — the two source tabs have different shapes and both gain
+columns, and a restore needs the row as it was rather than an interpretation of
+it. `archive.restore` rebuilds through the same `from_row` a sheet row goes
+through, then **appends**: everything below moved up when the row went, so the
+old row number means nothing. `views/deleted.py` is the dashboard.
 
 `store.delete` / `store.update` and their `spend` equivalents **re-read the row
 and confirm it still holds the expected entry before touching it.** Rows shift

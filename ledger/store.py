@@ -316,6 +316,13 @@ def delete(entry: Entry, secrets: dict | None = None) -> None:
             f"Row {entry.row} no longer matches this entry — the sheet changed "
             "since it was loaded. Reload and try again."
         )
+    # Archived *before* the row goes, and a failure here stops the deletion:
+    # a sheet has no undo, so losing the record entirely is the worse outcome
+    # of the two. This is the opposite of how a notification is treated, and
+    # for the opposite reason — that one costs a message, this one costs data.
+    from ledger import archive
+
+    archive.record(archive.ENTRY, entry, secrets)
     worksheet.delete_rows(entry.row)
     _announce("Ledger entry", "deleted", before=entry, secrets=secrets)
 

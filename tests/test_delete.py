@@ -27,15 +27,25 @@ def make(row: int | None = 2, **kw) -> Entry:
 
 
 class FakeSheet:
+    """Stands in for both tabs a delete now touches: the ledger it removes a row
+    from, and the `deleted` archive it writes to first."""
+
     def __init__(self, rows: dict[int, list[str]]):
         self.rows = rows
         self.deleted: list[int] = []
+        self.archived: list[list] = []
 
     def row_values(self, n):
         return self.rows.get(n, [])
 
     def delete_rows(self, n):
         self.deleted.append(n)
+
+    def append_rows(self, rows, **kw):
+        self.archived.extend(rows)
+
+    def update(self, values=None, range_name=None, **kw):
+        pass
 
 
 def sheet_for(entry: Entry) -> FakeSheet:
@@ -45,7 +55,7 @@ def sheet_for(entry: Entry) -> FakeSheet:
 def test_deletes_the_row_when_it_still_matches(monkeypatch):
     entry = make()
     fake = sheet_for(entry)
-    monkeypatch.setattr(store, "_open_worksheet", lambda _s: fake)
+    monkeypatch.setattr(store, "_open_worksheet", lambda _s, tab=None: fake)
 
     store.delete(entry, secrets=CONFIGURED)
 
@@ -57,7 +67,7 @@ def test_refuses_when_the_row_now_holds_something_else(monkeypatch):
     not be allowed to delete an unrelated record."""
     entry = make()
     fake = FakeSheet({2: ["2026-02-02", "Someone Else", "Other", "given", "99.00", "INR", ""]})
-    monkeypatch.setattr(store, "_open_worksheet", lambda _s: fake)
+    monkeypatch.setattr(store, "_open_worksheet", lambda _s, tab=None: fake)
 
     with pytest.raises(RuntimeError, match="no longer matches"):
         store.delete(entry, secrets=CONFIGURED)
@@ -68,7 +78,7 @@ def test_refuses_when_the_row_now_holds_something_else(monkeypatch):
 def test_refuses_when_the_row_is_gone(monkeypatch):
     entry = make()
     fake = FakeSheet({})
-    monkeypatch.setattr(store, "_open_worksheet", lambda _s: fake)
+    monkeypatch.setattr(store, "_open_worksheet", lambda _s, tab=None: fake)
 
     with pytest.raises(RuntimeError, match="no longer matches"):
         store.delete(entry, secrets=CONFIGURED)
@@ -81,7 +91,7 @@ def test_tolerates_a_narrower_sheet(monkeypatch):
     identifying fields still match, so the delete must go ahead."""
     entry = make()
     fake = FakeSheet({2: entry.to_row()[:6]})
-    monkeypatch.setattr(store, "_open_worksheet", lambda _s: fake)
+    monkeypatch.setattr(store, "_open_worksheet", lambda _s, tab=None: fake)
 
     store.delete(entry, secrets=CONFIGURED)
 
@@ -100,7 +110,7 @@ def test_amount_is_compared_as_a_number_not_as_text(monkeypatch, stored):
     row = entry.to_row()
     row[4] = stored
     fake = FakeSheet({2: row})
-    monkeypatch.setattr(store, "_open_worksheet", lambda _s: fake)
+    monkeypatch.setattr(store, "_open_worksheet", lambda _s, tab=None: fake)
 
     store.delete(entry, secrets=CONFIGURED)
 

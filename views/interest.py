@@ -271,17 +271,26 @@ if _have:
                 f"{target:%B %Y} charge — nothing to copy."
             )
         else:
-            total = sum(c.amount_minor for c in todo)
-            st.markdown(
-                f"**{len(todo)}** charge{'s' if len(todo) != 1 else ''} would be "
-                f"created for *{target:%B %Y}*, totalling "
-                f"**{format_money(total, currency)}**:"
+            st.markdown(f"**Who to copy into {target:%B %Y}:**")
+            # Select-all is the default because copying the whole month is the
+            # common case. Its value is folded into each checkbox's key, so
+            # flipping it makes the row checkboxes new widgets and they take the
+            # new default — the same reason add_entry carries a round number in
+            # its keys, and for the same Streamlit reason: an existing widget
+            # keeps whatever the browser is showing.
+            all_on = st.checkbox(
+                f"Select all {len(todo)}", value=True, key=field("clone_all")
             )
-            for c in todo:
-                st.markdown(
-                    f"- **{esc(c.person)}** — {format_money(c.amount_minor, currency)}"
-                    + (f" · {esc(c.note)}" if c.note else "")
+            picked = [
+                c for c in todo
+                if st.checkbox(
+                    f"{c.person} — {format_money(c.amount_minor, currency)}"
+                    + (f"  ·  {c.note}" if c.note else ""),
+                    value=all_on,
+                    key=f"{field('clone_pick')}_{int(all_on)}_{c.person}",
                 )
+            ]
+            total = sum(c.amount_minor for c in picked)
             if already:
                 st.caption(
                     "Left alone, because they already have a charge that month: "
@@ -293,11 +302,20 @@ if _have:
                 "they came from, not about this one."
             )
 
-            if st.button(f"Create {len(todo)} charge"
-                         f"{'s' if len(todo) != 1 else ''} for {target:%B %Y}",
-                         type="primary", key=field("clone_go")):
+            if not picked:
+                st.warning("Nothing ticked — choose at least one person to copy.")
+            else:
+                st.info(
+                    f"**{len(picked)}** of {len(todo)} · "
+                    f"**{format_money(total, currency)}** into *{target:%B %Y}*"
+                )
+
+            if st.button(f"Create {len(picked)} charge"
+                         f"{'s' if len(picked) != 1 else ''} for {target:%B %Y}",
+                         type="primary", key=field("clone_go"),
+                         disabled=not picked):
                 made, failed = 0, []
-                for c in todo:
+                for c in picked:
                     try:
                         interest.set_for_month(
                             c.person, target, c.amount_minor, currency=currency,
