@@ -112,8 +112,30 @@ amounts, and there is no way to read that screen which is true.
 | **Add entry** | The form. Clears itself after a save, ready for the next one |
 | **Edit entries** | Find a row by person, ledger, year or free text, then change or remove it |
 | **Assistant** | Say what happened, or upload a statement, and approve what it drafts |
+| **Interest** | What each person owes in interest, kept out of the ledger totals. Copy a whole month forward rather than retyping it |
 | **Spending** / **Add spending** | General expenses, deliberately kept out of the lending totals |
+| **Deleted** | Every removed row, with what it said and when it went — and a way to put it back |
 | **Download** | Excel, PDF, or a summary to send by WhatsApp or email |
+
+## Optional, and off until configured
+
+Each of these is absent-means-off, so the app runs without any of them exactly
+as it did before they existed. All go in `.streamlit/secrets.toml` —
+`.streamlit/secrets.toml.example` carries the shape and the URLs to generate
+each credential.
+
+| Add | And you get |
+|---|---|
+| `[notify]` | An email whenever anything is added, edited or deleted, naming which fields changed and what they changed from and to. Needs a Gmail App Password |
+| `[auth]` | Google sign-in. Stores no password anywhere; the app only checks the address against your `allowed` list |
+| `[accounts] enabled = true` | Name/password accounts in a `users` tab instead, with sign-up and a reset. Weaker than `[auth]` — the hashes live in the workbook, so anyone who can *edit* the sheet is effectively an administrator |
+| `NVIDIA_API_KEY` | The Assistant page |
+
+Verify the email setup without showing anybody the password:
+
+```bash
+.venv/bin/python -m ledger.notify --test
+```
 
 ## Layout
 
@@ -130,6 +152,13 @@ ledger/
   assistant.py    NVIDIA endpoint; drafts entries, never writes them
   docs.py         an upload turned into text or a right-sized image
   invest.py       compounding — the "Invested instead" page it feeds is off the router
+  interest.py     the interest tab, never summed into the ledger
+  people.py       the people tab: who rolls up under whom
+  facts.py        answers the arithmetic questions in code, before the model
+  archive.py      the deleted tab: what was removed, and restoring it
+  auth.py         the sign-in gate — Google OIDC, or name/password
+  accounts.py     the users tab: registration, hashing, password reset
+  notify.py       emails what changed, to whom, whenever the sheet is written
   settle.py       clearing a balance to zero
   export.py       xlsx, PDF, shareable summary
   demo.py         deterministic sample data

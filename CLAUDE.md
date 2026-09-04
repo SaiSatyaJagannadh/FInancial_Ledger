@@ -31,11 +31,21 @@ headlessly and curls it. That curl only renders the *default* page, so
 `tests/test_pages.py` runs every view through Streamlit's `AppTest` — a module
 shadowed by a local variable crashed one page while its own unit tests passed.
 
-**A fake worksheet must copy what Google does, not what would be convenient.**
-`FakeSheet.append_rows` in `tests/test_integration.py` reproduces the real
-table-detection and OVERWRITE behaviour; while it was a one-line
-`self.rows.append(row)` the whole suite passed over a write path that destroys
-rows on the real sheet. The same is true of the amount comparison below.
+**A fake worksheet must copy what gspread does, not what would be convenient.**
+This is the most repeated mistake in the repo — four shipped bugs, every one of
+them green in CI the whole time:
+
+| The fake did | So the suite missed |
+|---|---|
+| `append_rows` = `self.rows.append(row)` | `values.append` defaulting to OVERWRITE, which destroys rows below a gap |
+| `update(self, cell, values)` — gspread 5's order | The header write passing `"A1"` as the *values*, on every new sheet |
+| `get_all_records()` with no `expected_headers` | gspread refusing a 20-column tab whose spare headings are blank — every sign-in said "email or password is wrong" |
+| `update()` ignoring `range_name` | `set_password` writing to the header row, so a password change that never happened reported success |
+
+A fifth was not a fake at all but a test that monkeypatched `load()`, so a
+write was asserted and the read-back never exercised. When a double and
+production disagree, the double wins in CI and loses in front of a person.
+Copy the real signature, including the arguments you are not using.
 
 ## Architecture
 
