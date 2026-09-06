@@ -114,9 +114,10 @@ for item in shown:
                 st.session_state[armed] = True
                 st.rerun()
         else:
-            yes, no = st.columns(2)
-            if yes.button("Yes", key=f"ry_{item.row}", type="primary",
-                          width="stretch"):
+            # Stacked, not split: this column is narrow enough that two
+            # buttons side by side come out as single truncated letters.
+            if st.button("Restore it", key=f"ry_{item.row}", type="primary",
+                         width="stretch"):
                 try:
                     back = archive.restore(item)
                 except Exception as exc:  # noqa: BLE001 — say what the sheet said
@@ -131,7 +132,7 @@ for item in shown:
                         "it is back on the sheet as a new row."
                     )
                     st.rerun()
-            if no.button("No", key=f"rn_{item.row}", width="stretch"):
+            if st.button("Cancel", key=f"rn_{item.row}", width="stretch"):
                 st.session_state[armed] = False
                 st.rerun()
     st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)

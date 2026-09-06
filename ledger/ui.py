@@ -426,8 +426,12 @@ def delete_control(entry, scope: str) -> bool:
             st.rerun()
         return False
 
-    yes, no = st.columns(2)
-    if yes.button("Yes", key=f"yes_{scope}_{entry.row}", type="primary", width="stretch"):
+    # Stacked, not side by side. This whole control lives in the last column of
+    # a six-column grid, and splitting it again left two buttons about four
+    # characters wide: "Yes" and "No" came out as "Y." and "N", which is not a
+    # thing to ask somebody to click when the row goes for good.
+    if st.button("Delete it", key=f"yes_{scope}_{entry.row}", type="primary",
+                 width="stretch", help="Remove this row from the sheet"):
         try:
             store.delete(entry)
         except Exception as exc:  # noqa: BLE001 — show whatever the sheet said
@@ -438,7 +442,7 @@ def delete_control(entry, scope: str) -> bool:
             st.session_state[armed] = False
             st.toast("Entry deleted")
             st.rerun()
-    if no.button("No", key=f"no_{scope}_{entry.row}", width="stretch"):
+    if st.button("Cancel", key=f"no_{scope}_{entry.row}", width="stretch"):
         st.session_state[armed] = False
         st.rerun()
     return False
@@ -679,8 +683,10 @@ def _remove_transaction(t, scope: str) -> None:
             st.session_state[armed] = True
             st.rerun()
         return
-    yes, no = st.columns(2)
-    if yes.button("Yes", key=f"tyes_{scope}_{t.row}", type="primary", width="stretch"):
+    # Stacked for the same reason the ledger's is — this sits in the last,
+    # narrowest column of the grid.
+    if st.button("Delete it", key=f"tyes_{scope}_{t.row}", type="primary",
+                 width="stretch"):
         try:
             spend.remove(t)
         except Exception as exc:  # noqa: BLE001
@@ -690,6 +696,6 @@ def _remove_transaction(t, scope: str) -> None:
             st.session_state[armed] = False
             st.toast("Transaction deleted")
             st.rerun()
-    if no.button("No", key=f"tno_{scope}_{t.row}", width="stretch"):
+    if st.button("Cancel", key=f"tno_{scope}_{t.row}", width="stretch"):
         st.session_state[armed] = False
         st.rerun()

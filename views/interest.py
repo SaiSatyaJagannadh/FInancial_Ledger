@@ -559,16 +559,16 @@ for charge in shown:
                 st.session_state[armed] = True
                 st.rerun()
         else:
-            yes, no = st.columns(2)
-            if yes.button("Yes", key=f"iyes_{charge.row}", type="primary",
-                          width="stretch"):
+            # Stacked, not split — the same narrow column as the ledger's.
+            if st.button("Delete it", key=f"iyes_{charge.row}", type="primary",
+                         width="stretch"):
                 try:
                     interest.remove(charge)
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Could not delete: {exc}")
                 st.session_state[armed] = False
                 st.rerun()
-            if no.button("No", key=f"ino_{charge.row}", width="stretch"):
+            if st.button("Cancel", key=f"ino_{charge.row}", width="stretch"):
                 st.session_state[armed] = False
                 st.rerun()
     st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)

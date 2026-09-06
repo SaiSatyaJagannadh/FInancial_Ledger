@@ -317,6 +317,27 @@ sheet edit. With neither, the page says to delete the row from the `users` tab.
 `accounts.set_password` re-reads the row and confirms it still holds that
 address before writing, the same guard the ledger uses.
 
+**Being signed in is a fact about the session, never a question for the sheet.**
+`auth.signed_in_email()` reads session state and nothing else. Re-reading the
+`users` tab on every rerun to answer it put a network call in front of every
+page render, and `accounts.load` answers a 503 with "no accounts" — so a random
+Google failure meant `find` returned None and the person was thrown back to the
+sign-in form mid-action. Confirming a delete was the reliable way to trigger it:
+archive, delete and notify all go out, and this was the very next read. The
+display name is stored beside the address at sign-in for the same reason.
+Nothing is trusted that was not already trusted — only a verified sign-in sets
+that key — and the cost is that removing somebody from the sheet does not end a
+session they already hold. `tests/test_auth_gate.py` fails if a sheet read
+creeps back in.
+
+**The gate is the whole screen while it is up** (`auth._auth_chrome`). It hides
+the sidebar, because `st.stop()` runs *before* `st.navigation` and Streamlit
+therefore leaves the previous run's page list on screen — somebody who had just
+signed out was still being shown Ledger, Add entry, Interest and the rest beside
+the login form. Signing out lands on its own "you are signed out" screen with
+one way back, rather than dumping somebody onto the form they were just told to
+fill in.
+
 **Its ceiling is structural and is not fixable here:** the hashes sit in the
 workbook, so anyone who can *edit* the sheet can add a user row or paste over a
 hash and sign in as somebody else. Sheet access is administrator access. That

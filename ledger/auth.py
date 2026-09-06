@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import streamlit as st
 
+from ledger.ui import INK, RULE   # the ledger's own ink and rule, so the way in
+                                  # looks like the thing it leads to
+
 #: Streamlit's own section. It needs redirect_uri, cookie_secret and a provider.
 SECTION = "auth"
 
@@ -106,16 +109,105 @@ def current_user() -> str:
 #: again.
 SESSION = "account_email"
 
+#: The display name, kept beside it. Written once at sign-in so that showing
+#: who is signed in costs nothing — see `signed_in_email`.
+SESSION_NAME = "account_name"
+
+#: Set by `_sign_out` so the next run says "signed out" rather than dropping
+#: somebody straight back onto a form they did not ask for.
+SIGNED_OUT = "signed_out"
+
+
+def signed_in_email() -> str:
+    """The password account signed in on this session, or "".
+
+    **Session state alone, never a re-read of the `users` tab.** Checking the
+    sheet on every rerun put a network call in front of every page render, and a
+    single 503 — which Google hands out at random, and which a write-heavy rerun
+    makes likelier — answered "no accounts", so `find` returned None and the
+    person was thrown back to the login form mid-action. Deleting an entry was
+    the reliable way to trigger it: archive, delete and notify all go out, then
+    the very next read is this one. Nothing is being trusted here that was not
+    already trusted: this key is only ever set by a verified sign-in.
+
+    The cost is that removing somebody from the sheet does not end a session
+    they already have. It ends when their browser tab does.
+    """
+    return str(st.session_state.get(SESSION) or "")
+
 
 def signed_in_account():
-    """The `users`-tab account signed in on this session, if any."""
+    """The full `users`-tab record for this session — a sheet read.
+
+    Not used to decide whether somebody is signed in; `signed_in_email` is.
+    """
     from ledger import accounts
 
-    email = st.session_state.get(SESSION)
+    email = signed_in_email()
     if not email:
         return None
     known, _ = accounts.load()
     return accounts.find(email, known)
+
+
+#: The signed-out screen and the sign-in screen are the whole app while they are
+#: up, so they hide the app's furniture. The sidebar matters most: `st.stop()`
+#: runs before `st.navigation` does, so Streamlit keeps the *previous* run's page
+#: list on screen — somebody who has just signed out was still being shown
+#: Ledger, Add entry, Interest and the rest down the side of the login form.
+_AUTH_CSS = f"""
+<style>
+  [data-testid="stSidebar"],
+  [data-testid="stSidebarNav"],
+  [data-testid="stSidebarCollapsedControl"],
+  header[data-testid="stHeader"] {{ display: none !important; }}
+
+  .block-container {{ max-width: 30rem; padding-top: 4rem; }}
+
+  .auth-mark {{ font-size: 1.9rem; line-height: 1; }}
+  .auth-name {{
+      font-size: 1.9rem; font-weight: 700; letter-spacing: -0.025em;
+      color: {INK}; margin: .35rem 0 .1rem 0;
+  }}
+  .auth-sub {{ font-size: .92rem; opacity: .6; margin: 0 0 1.5rem 0; }}
+
+  /* One card, hairline-ruled, the same ink and rule the ledger itself uses. */
+  div[data-testid="stForm"] {{
+      border: 1px solid {RULE}; border-radius: 14px;
+      padding: 1.2rem 1.2rem .4rem 1.2rem;
+  }}
+  [data-baseweb="tab-list"] {{ gap: 1.2rem; }}
+</style>
+"""
+
+
+def _auth_chrome() -> None:
+    """Strip the app down to the screen in front of you."""
+    st.markdown(_AUTH_CSS, unsafe_allow_html=True)
+    st.markdown(
+        '<div class="auth-mark">₹</div>'
+        '<div class="auth-name">Personal Ledger</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _signed_out_screen() -> None:
+    """Say the sign-out happened, and stop. Then offer the way back in.
+
+    Landing straight back on the sign-in form left nobody any sign that the
+    button had worked — the same page they were just told to fill in, with their
+    address gone from it. This is one screen, and it stays until they ask.
+    """
+    _auth_chrome()
+    st.markdown(
+        '<div class="auth-sub">You are signed out. Nothing from that session '
+        "is left in this browser tab.</div>",
+        unsafe_allow_html=True,
+    )
+    if st.button("Sign in again", type="primary", width="stretch"):
+        st.session_state.pop(SIGNED_OUT, None)
+        st.rerun()
+    st.stop()
 
 
 def _password_gate() -> None:
@@ -128,18 +220,27 @@ def _password_gate() -> None:
     from ledger import accounts
     from ledger.models import EntryError
 
-    if signed_in_account() is not None:
+    if signed_in_email():
         return
+
+    if st.session_state.get(SIGNED_OUT):
+        _signed_out_screen()
+
+    _auth_chrome()
 
     known, problems = accounts.load()
     for problem in problems:
         st.warning(problem)
 
-    st.title("Personal Ledger")
     if st.session_state.pop("account_created", None):
         st.success(
             f"Account created for **{st.session_state.pop('account_created_email', '')}**. "
             "Sign in with it below."
+        )
+    else:
+        st.markdown(
+            '<div class="auth-sub">Private. Sign in to see it.</div>',
+            unsafe_allow_html=True,
         )
 
     first_ever = not known
@@ -174,6 +275,9 @@ def _password_gate() -> None:
                 st.error("Email or password is wrong.")
             else:
                 st.session_state[SESSION] = account.email
+                # Kept beside it so the sidebar can say who is signed in
+                # without reading the users tab again on every rerun.
+                st.session_state[SESSION_NAME] = account.name or account.email
                 st.rerun()
 
     with sign_up:
@@ -363,16 +467,20 @@ def gate() -> None:
         return
 
     if not st.user.is_logged_in:
-        st.title("Personal Ledger")
-        st.caption("This ledger is private. Sign in to continue.")
-        st.button("Sign in with Google", type="primary", on_click=st.login)
+        _auth_chrome()
+        st.markdown(
+            '<div class="auth-sub">Private. Sign in to see it.</div>',
+            unsafe_allow_html=True,
+        )
+        st.button("Sign in with Google", type="primary", width="stretch",
+                  on_click=st.login)
         st.stop()
 
     email = str(st.user.get("email") or "")
     if allowed_emails() is None:
         # Locked, not refused — saying "you are not allowed" would send somebody
         # chasing an access request when the file is what needs fixing.
-        st.title("Personal Ledger")
+        _auth_chrome()
         st.error(
             "The access list in `[auth].allowed` cannot be read, so nobody is "
             "being let in. It must be a list of addresses, for example "
@@ -382,7 +490,7 @@ def gate() -> None:
         st.stop()
 
     if not permitted(email):
-        st.title("Personal Ledger")
+        _auth_chrome()
         st.error(
             f"**{email}** is not on the access list for this ledger. "
             "Ask the owner to add you."
@@ -398,11 +506,13 @@ def _sign_out() -> None:
     sitting in state, so signing out and back in showed somebody the previous
     person's address in the box.
     """
-    for key in [SESSION, _RESET, "account_created", "account_created_email",
+    for key in [SESSION, SESSION_NAME, _RESET, "account_created",
+                "account_created_email",
                 "login_email", "login_password", "signup_name", "signup_email",
                 "signup_password", "signup_confirm", "reset_email", "reset_code",
                 "reset_new", "reset_again"]:
         st.session_state.pop(key, None)
+    st.session_state[SIGNED_OUT] = True
 
 
 def sidebar_identity() -> None:
@@ -413,10 +523,10 @@ def sidebar_identity() -> None:
             st.button("Sign out", width="stretch", on_click=st.logout)
         return
 
-    account = signed_in_account()
-    if account is not None:
+    email = signed_in_email()
+    if email:
         with st.sidebar:
-            st.caption(f"Signed in as {account.name or account.email}")
+            st.caption(f"Signed in as {st.session_state.get(SESSION_NAME) or email}")
             st.button("Sign out", width="stretch", on_click=_sign_out)
 
 
@@ -448,6 +558,28 @@ def demo() -> None:
 
     # Outside a Streamlit runtime this must answer, not raise.
     assert current_user() == ""
+
+    # Being signed in is a fact about the session, not a question for the sheet.
+    # This is what stopped a random Google 503 mid-delete from bouncing somebody
+    # back to the login form, so it is worth a check that fails if the users tab
+    # ever creeps back into the answer.
+    class _Session(dict):
+        pass
+
+    real, st.session_state = st.session_state, _Session()
+    try:
+        assert signed_in_email() == ""
+        st.session_state[SESSION] = "ravi@example.com"
+        st.session_state[SESSION_NAME] = "Ravi"
+        assert signed_in_email() == "ravi@example.com"
+        assert current_user() == "ravi@example.com", "writes are attributed to them"
+
+        _sign_out()
+        assert signed_in_email() == "", "sign out must clear the session"
+        assert st.session_state.get(SESSION_NAME) is None, "and the name with it"
+        assert st.session_state[SIGNED_OUT] is True, "the next run says so on screen"
+    finally:
+        st.session_state = real
 
     print("ledger.auth: all checks passed")
 
