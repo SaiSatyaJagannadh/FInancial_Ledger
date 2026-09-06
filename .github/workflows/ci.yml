@@ -1,30 +1,29 @@
-name: Build and Push to Docker Hub
+name: CI
 
 on:
   push:
-    branches: [main]  # Only trigger on main branch pushes
+    branches: [main]
+  pull_request:
 
 jobs:
-  build-and-push:
+  test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx # modern Docker builder that supports multi-platform builds
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./dockerfile  # change if your Dockerfile has a different name or path
-          push: true
-          tags: saijagannadh/telco-fastapi:latest
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -r requirements-dev.txt
+      - name: Test
+        # No secrets in CI, so this also proves the demo path stays working.
+        run: python -m pytest -q
+      - name: App imports and renders headlessly
+        run: |
+          streamlit run app.py --server.headless true --server.port 8501 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8501 >/dev/null && exit 0
+            sleep 2
+          done
+          echo "app did not come up"; exit 1
