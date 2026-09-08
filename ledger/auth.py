@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import streamlit as st
 
-from ledger.ui import INK, RULE   # the ledger's own ink and rule, so the way in
-                                  # looks like the thing it leads to
+from ledger.ui import INK, PAPER, RULE, SHADE   # the ledger's own colours, so
+                                                # the way in looks like the
+                                                # thing it leads to
 
 #: Streamlit's own section. It needs redirect_uri, cookie_secret and a provider.
 SECTION = "auth"
@@ -155,6 +156,17 @@ def signed_in_account():
 #: runs before `st.navigation` does, so Streamlit keeps the *previous* run's page
 #: list on screen — somebody who has just signed out was still being shown
 #: Ledger, Add entry, Interest and the rest down the side of the login form.
+#:
+#: The design is one card on paper. Everything Streamlit renders here — the
+#: mark, the tabs, the form, any warning — lands inside `.block-container`, so
+#: *that* is made the card rather than a box drawn around one part of it. A
+#: border around only the form left the tabs floating above an unrelated
+#: rectangle.
+#:
+#: It has to work on a phone, which is where this app is actually used: widths
+#: are `min(…, 100% - margin)` rather than fixed, type is `clamp()`ed, the
+#: buttons fill their width so they can be hit with a thumb, and the tab row
+#: wraps instead of scrolling a third tab out of sight.
 _AUTH_CSS = f"""
 <style>
   [data-testid="stSidebar"],
@@ -162,31 +174,93 @@ _AUTH_CSS = f"""
   [data-testid="stSidebarCollapsedControl"],
   header[data-testid="stHeader"] {{ display: none !important; }}
 
-  .block-container {{ max-width: 30rem; padding-top: 4rem; }}
+  /* Centred in the window, not pinned to the top — a short card (the signed-out
+     screen is four lines and a button) floating under a header-shaped gap looks
+     like a page that failed to finish loading. `safe center` rather than
+     `center`: when the card is taller than the phone it holds it, the top of an
+     overflowing form would otherwise be scrolled off above the viewport and
+     unreachable. */
+  .stMain {{ display: flex; justify-content: center; align-items: safe center; }}
 
-  .auth-mark {{ font-size: 1.9rem; line-height: 1; }}
+  /* The card. Padding scales with the viewport so a phone does not spend a
+     third of its screen on the space above the mark. */
+  .block-container {{
+      /* Against the viewport, not the parent: `100%` of a full-bleed parent is
+         a card with its edges flush to both sides of a phone. */
+      width: min(25rem, calc(100vw - 2rem));
+      max-width: 25rem;
+      margin: 1.25rem auto;
+      padding: clamp(1.4rem, 5vw, 2.2rem) clamp(1.2rem, 5vw, 2rem) 1.4rem;
+      background: {PAPER};
+      border: 1px solid {RULE};
+      border-radius: 18px;
+      box-shadow: 0 1px 2px rgba(22, 32, 46, .04),
+                  0 14px 34px -22px rgba(22, 32, 46, .45);
+  }}
+
+  /* The mark is a struck seal, not a stray character — ink block, cream glyph,
+     the one place on the screen the ledger's own colour appears. */
+  .auth-mark {{
+      width: 42px; height: 42px; border-radius: 11px;
+      background: {INK}; color: {PAPER};
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.32rem; font-weight: 600; line-height: 1;
+      margin-bottom: .85rem;
+  }}
   .auth-name {{
-      font-size: 1.9rem; font-weight: 700; letter-spacing: -0.025em;
-      color: {INK}; margin: .35rem 0 .1rem 0;
+      font-size: clamp(1.35rem, 5.5vw, 1.6rem); font-weight: 700;
+      letter-spacing: -0.02em; color: {INK}; margin: 0 0 .2rem 0;
+      line-height: 1.15;
   }}
-  .auth-sub {{ font-size: .92rem; opacity: .6; margin: 0 0 1.5rem 0; }}
+  .auth-sub {{
+      font-size: .9rem; opacity: .62; margin: 0 0 1.35rem 0; line-height: 1.5;
+  }}
 
-  /* One card, hairline-ruled, the same ink and rule the ledger itself uses. */
+  /* The form is inside the card, so it draws no box of its own. */
   div[data-testid="stForm"] {{
-      border: 1px solid {RULE}; border-radius: 14px;
-      padding: 1.2rem 1.2rem .4rem 1.2rem;
+      border: 0; padding: 0; background: transparent;
   }}
-  [data-baseweb="tab-list"] {{ gap: 1.2rem; }}
+
+  /* Wrapping, not scrolling. A tab that has scrolled off the right of a narrow
+     phone is a route nobody finds, and on this screen that route is the way
+     back into a locked-out account. Addressed by ARIA role and testid rather
+     than by Streamlit's generated class names, which change between releases. */
+  [role="tablist"] {{
+      flex-wrap: wrap; gap: .2rem 1.1rem; overflow-x: visible;
+      margin-bottom: .35rem;
+  }}
+  [data-testid="stTab"] {{ padding-left: 0; padding-right: 0; }}
+  [data-testid="stTab"] p {{ font-size: .9rem; font-weight: 600; }}
+
+  /* Fields read as fields: a hairline box on the card, not a grey slab. */
+  [data-testid="stTextInputRootElement"] {{
+      background: #FFFFFF; border: 1px solid {RULE}; border-radius: 10px;
+  }}
+  [data-testid="stTextInputRootElement"]:focus-within {{ border-color: {INK}; }}
+  .stTextInput label p {{ font-size: .85rem; font-weight: 600; opacity: .75; }}
+
+  /* Streamlit's alerts arrive in a blue that belongs to no other part of this
+     app. On paper they become a ruled note. */
+  [data-testid="stAlertContainer"] {{
+      background: {SHADE}; border-radius: 10px; border-left: 3px solid {INK};
+  }}
+  [data-testid="stAlert"] p {{ color: {INK}; font-size: .86rem; line-height: 1.5; }}
+
+  /* 44px is the smallest thing a thumb reliably hits; these come out at 46. */
+  .stButton button, .stFormSubmitButton button {{
+      border-radius: 10px; font-weight: 600; padding: .68rem 1rem; width: 100%;
+  }}
 </style>
 """
 
 
-def _auth_chrome() -> None:
-    """Strip the app down to the screen in front of you."""
+def _auth_chrome(sub: str = "") -> None:
+    """Strip the app down to the screen in front of you, and head it."""
     st.markdown(_AUTH_CSS, unsafe_allow_html=True)
     st.markdown(
         '<div class="auth-mark">₹</div>'
-        '<div class="auth-name">Personal Ledger</div>',
+        '<div class="auth-name">Personal Ledger</div>'
+        + (f'<div class="auth-sub">{sub}</div>' if sub else ""),
         unsafe_allow_html=True,
     )
 
@@ -198,12 +272,8 @@ def _signed_out_screen() -> None:
     button had worked — the same page they were just told to fill in, with their
     address gone from it. This is one screen, and it stays until they ask.
     """
-    _auth_chrome()
-    st.markdown(
-        '<div class="auth-sub">You are signed out. Nothing from that session '
-        "is left in this browser tab.</div>",
-        unsafe_allow_html=True,
-    )
+    _auth_chrome("You are signed out. Nothing from that session is left in "
+                 "this browser tab.")
     if st.button("Sign in again", type="primary", width="stretch"):
         st.session_state.pop(SIGNED_OUT, None)
         st.rerun()
@@ -226,33 +296,31 @@ def _password_gate() -> None:
     if st.session_state.get(SIGNED_OUT):
         _signed_out_screen()
 
-    _auth_chrome()
-
     known, problems = accounts.load()
+    made = st.session_state.pop("account_created", None)
+    first_ever = not known
+
+    _auth_chrome("Private. Sign in to see it." if not made else "")
+
     for problem in problems:
         st.warning(problem)
 
-    if st.session_state.pop("account_created", None):
+    if made:
         st.success(
             f"Account created for **{st.session_state.pop('account_created_email', '')}**. "
             "Sign in with it below."
         )
-    else:
-        st.markdown(
-            '<div class="auth-sub">Private. Sign in to see it.</div>',
-            unsafe_allow_html=True,
-        )
 
-    first_ever = not known
     if first_ever:
         st.info(
             "No accounts yet. The first one created becomes yours — make it now, "
             "before the app is shared with anybody."
         )
 
-    sign_in, sign_up, forgot = st.tabs(
-        ["Sign in", "Create an account", "Forgotten password"]
-    )
+    # Short labels. The long ones ("Create an account", "Forgotten password")
+    # ran past the right edge of a phone, and a tab that has scrolled out of
+    # sight is a route nobody finds — which here is the way back in.
+    sign_in, sign_up, forgot = st.tabs(["Sign in", "Create account", "Forgot?"])
 
     with sign_in:
         # A form, not loose inputs and a button. A browser filling a saved
@@ -266,7 +334,8 @@ def _password_gate() -> None:
             email = st.text_input("Email", key="login_email")
             password = st.text_input("Password", type="password",
                                      key="login_password")
-            submitted = st.form_submit_button("Sign in", type="primary")
+            submitted = st.form_submit_button("Sign in", type="primary",
+                                              width="stretch")
         if submitted:
             account = accounts.authenticate(email, password)
             if account is None:
@@ -298,7 +367,8 @@ def _password_gate() -> None:
                                     key="signup_confirm")
             code_given = (st.text_input("Sign-up code", key="signup_code")
                           if code_wanted else "")
-            registering = st.form_submit_button("Create account", type="primary")
+            registering = st.form_submit_button("Create account", type="primary",
+                                                width="stretch")
 
         if registering:
             wrong = accounts.validate(name, new_email, new_password, confirm)
@@ -373,7 +443,8 @@ def _reset_form(known: list) -> None:
         with st.form("reset_start_form"):
             email = st.text_input("Your email", key="reset_email")
             asked = st.form_submit_button(
-                "Send me a code" if can_email else "Continue", type="primary"
+                "Send me a code" if can_email else "Continue", type="primary",
+                width="stretch",
             )
         if asked:
             account = accounts.find(email, known)
@@ -467,11 +538,7 @@ def gate() -> None:
         return
 
     if not st.user.is_logged_in:
-        _auth_chrome()
-        st.markdown(
-            '<div class="auth-sub">Private. Sign in to see it.</div>',
-            unsafe_allow_html=True,
-        )
+        _auth_chrome("Private. Sign in to see it.")
         st.button("Sign in with Google", type="primary", width="stretch",
                   on_click=st.login)
         st.stop()

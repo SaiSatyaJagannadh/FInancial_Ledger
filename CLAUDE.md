@@ -358,6 +358,19 @@ the login form. Signing out lands on its own "you are signed out" screen with
 one way back, rather than dumping somebody onto the form they were just told to
 fill in.
 
+It is **one card, and `.block-container` is the card** — everything Streamlit
+renders on this screen lands inside it, so a border drawn around only the form
+left the tabs floating above an unrelated rectangle. The phone is the case that
+breaks: the card is `min(25rem, calc(100vw - 2rem))` (against the *viewport* —
+`100%` of a full-bleed parent is a card flush to both edges), the type is
+`clamp()`ed, buttons are full width and 46px tall, and the tab labels are short
+("Sign in / Create account / Forgot?") because the long ones ran off a 320px
+screen and a tab scrolled out of sight is the forgotten-password route nobody
+finds. `.stMain` centres with `align-items: safe center`, so a form taller than
+the screen scrolls from its top instead of having it cut off. Streamlit's own
+widgets are addressed by `data-testid` and ARIA role, never by the generated
+`st-emotion-cache-*` classes, which change between releases.
+
 **Its ceiling is structural and is not fixable here:** the hashes sit in the
 workbook, so anyone who can *edit* the sheet can add a user row or paste over a
 hash and sign in as somebody else. Sheet access is administrator access. That

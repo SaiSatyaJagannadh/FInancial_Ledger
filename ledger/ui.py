@@ -170,6 +170,11 @@ INK = "#16202E"
 OUT = "#B3261E"   # money out, to them
 BACK = "#1B7A5A"  # money back, from them
 RULE = "#DCD8CC"
+#: The two grounds, matching `.streamlit/config.toml` — the page it is written
+#: on, and the tint used for a note on it. Named here so a screen that draws its
+#: own surfaces (the sign-in card) cannot drift away from the theme by a shade.
+PAPER = "#FFFDF9"
+SHADE = "#EDEBE3"
 
 _CSS = f"""
 <style>

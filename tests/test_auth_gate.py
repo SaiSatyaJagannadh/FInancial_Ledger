@@ -109,3 +109,39 @@ def test_the_gate_does_nothing_at_all_when_accounts_are_off(monkeypatch):
     assert not app.exception, [str(e.message) for e in app.exception]
     assert app.title[0].value == "Personal Ledger"
     assert not app.sidebar.caption, "nobody is signed in, so nothing to say"
+
+
+def _styles(app: AppTest) -> str:
+    """Everything the gate wrote as raw markup, which is where its CSS lives."""
+    return " ".join(m.value for m in app.markdown)
+
+
+@pytest.mark.parametrize("signed_out", [False, True])
+def test_every_gate_screen_hides_the_apps_furniture(monkeypatch, signed_out):
+    """The sidebar is the one that matters.
+
+    `st.stop()` runs before `st.navigation`, so Streamlit leaves the previous
+    run's page list on screen — somebody who had just signed out was still being
+    shown Ledger, Add entry, Interest and the rest beside the login form.
+    """
+    monkeypatch.setattr(accounts, "enabled", lambda *a, **k: True)
+    monkeypatch.setattr(accounts, "load", lambda *a, **k: ([], []))
+
+    css = _styles(gate_app(signed_out=signed_out).run())
+
+    assert 'data-testid="stSidebar"' in css and "display: none" in css
+    assert "stMainBlockContainer" in css or ".block-container" in css, \
+        "the screen draws itself as a card; without this it is a bare form"
+
+
+def test_the_tab_labels_stay_short_enough_for_a_phone(monkeypatch):
+    """Long labels ran off the right of a 320px screen, and a tab that has
+    scrolled out of sight is a route nobody finds — here, the way back into a
+    locked-out account."""
+    monkeypatch.setattr(accounts, "enabled", lambda *a, **k: True)
+    monkeypatch.setattr(accounts, "load", lambda *a, **k: ([], []))
+
+    labels = [t.label for t in gate_app().run().tabs]
+
+    assert labels == ["Sign in", "Create account", "Forgot?"], labels
+    assert sum(len(label) for label in labels) <= 32, labels
