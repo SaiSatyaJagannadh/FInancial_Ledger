@@ -355,6 +355,35 @@ def delete(entry: Entry, secrets: dict | None = None) -> None:
     _announce("Ledger entry", "deleted", before=entry, secrets=secrets)
 
 
+def delete_many(entries: list[Entry],
+                secrets: dict | None = None) -> list[tuple[Entry, str]]:
+    """Remove several entries. Returns what could not go, and why.
+
+    **Highest row number first.** That ordering is the entire reason this
+    function exists instead of a loop at the call site: deleting row 5 moves row
+    6 up into 5, so every row number after the first one is stale the moment it
+    is used. Going downwards means the rows still to be deleted are all *above*
+    the one that just went, and nothing above a deleted row moves. In the other
+    direction `delete`'s guard would refuse the rest of the selection — which is
+    the good outcome; the bad one is a sheet edited between the read and the
+    write, where a stale number can point at a real row that matches, and the
+    wrong record disappears with the archive faithfully recording it.
+
+    One failure does not stop the others: each delete re-checks its own row, so
+    the ones that can still go are safe to take. Every one that could not is
+    named, because "3 selected, 2 deleted" with no list is not a thing anybody
+    can act on.
+    """
+    problems: list[tuple[Entry, str]] = []
+    for entry in sorted(entries, key=lambda e: (e.row is not None, e.row or 0),
+                        reverse=True):
+        try:
+            delete(entry, secrets)
+        except Exception as exc:  # noqa: BLE001 — one bad row must not strand the rest
+            problems.append((entry, str(exc)))
+    return problems
+
+
 def update(original: Entry, edited: Entry, secrets: dict | None = None) -> None:
     """Replace one entry's row with an edited version.
 

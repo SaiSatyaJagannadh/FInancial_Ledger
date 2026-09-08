@@ -440,6 +440,7 @@ def delete_control(entry, scope: str) -> bool:
         else:
             clear_cache()
             st.session_state[armed] = False
+            forget_picks()
             st.toast("Entry deleted")
             st.rerun()
     if st.button("Cancel", key=f"no_{scope}_{entry.row}", width="stretch"):
@@ -448,9 +449,106 @@ def delete_control(entry, scope: str) -> bool:
     return False
 
 
-#: One grid, one set of widths, so every row lines up down the page.
-_LEDGER_COLS = [1.5, 2.3, 1.8, 3.0, 1.35, 1.45]
-_LEDGER_HEADS = ["Date", "Amount", "Ledger", "Note", "", ""]
+#: One grid, one set of widths, so every row lines up down the page. The first
+#: column is the tick box; everything after it is what it selects.
+_LEDGER_COLS = [0.45, 1.5, 2.3, 1.8, 3.0, 1.35, 1.45]
+_LEDGER_HEADS = ["", "Date", "Amount", "Ledger", "Note", "", ""]
+
+#: Prefix for every "this row is selected" key. Shared so that forgetting them
+#: is one loop rather than something each caller has to remember.
+_PICK = "pick_"
+
+
+def forget_picks() -> None:
+    """Untick everything, everywhere.
+
+    Called after *any* deletion, not just a bulk one. A tick is remembered by
+    row number, and deleting a row moves every row below it up one — so a tick
+    left behind no longer marks the entry somebody put it on, it marks whichever
+    entry has since slid into that row. On the next click that is what would go.
+    """
+    for key in [k for k in st.session_state if str(k).startswith(_PICK)]:
+        st.session_state.pop(key, None)
+
+
+def _pick_box(cell, entry, scope: str) -> bool:
+    """One row's tick box. Returns whether it is ticked, right now.
+
+    The answer comes from the widget itself rather than from session state read
+    ahead of the loop. A tick is only in state *after* the box has been drawn in
+    that run, and Streamlit resets the state of any widget a run did not reach —
+    so arming the confirmation with `st.rerun()` before the boxes were drawn
+    silently unticked every one of them, and the confirmation appeared over an
+    empty selection. Drawn first, read second.
+    """
+    if entry.row is None:
+        return False
+    return cell.checkbox(
+        f"Select {entry.person} {entry.date:%d %b %Y}",
+        key=f"{_PICK}{scope}_{entry.row}",
+        label_visibility="collapsed",
+        help="Tick to delete several at once",
+    )
+
+
+def _bulk_delete_bar(chosen: list, scope: str) -> None:
+    """Delete everything ticked, in one confirmed step.
+
+    Two clicks, the same as deleting one row, and the confirmation lists every
+    entry by name and figure. A count on its own ("Delete 3 entries?") is not
+    something anybody can check, and this is the one control here that can lose
+    three records to a single mis-click.
+    """
+    from ledger import store
+    from ledger.money import format_money
+
+    armed = f"bulk_{scope}"
+    left, right = st.columns([3, 1.5], vertical_alignment="center")
+    left.caption(f"**{len(chosen)} selected** on this list.")
+
+    if not st.session_state.get(armed):
+        if right.button(f"Delete {len(chosen)} selected", key=f"bdel_{scope}",
+                        width="stretch",
+                        help="Remove every ticked row from the sheet"):
+            st.session_state[armed] = True
+            st.rerun()
+        if right.button("Clear selection", key=f"bclr_{scope}", width="stretch"):
+            forget_picks()
+            st.rerun()
+        return
+
+    st.warning(
+        f"Delete these **{len(chosen)}** entries from the sheet?\n\n"
+        + "\n".join(
+            f"- {e.date:%d %b %Y} · **{format_money(e.amount_minor, e.currency)}** "
+            f"{'gave' if e.signed_minor > 0 else 'got back'} · {e.person} · {e.ledger}"
+            for e in chosen
+        )
+        + "\n\nEach one is archived to the **Deleted** tab first, so a restore "
+        "is possible — but the rows themselves go."
+    )
+    go, stop = st.columns(2)
+    if go.button(f"Delete {len(chosen)} entries", key=f"bgo_{scope}",
+                 type="primary", width="stretch"):
+        problems = store.delete_many(chosen)
+        clear_cache()
+        st.session_state[armed] = False
+        forget_picks()
+        gone = len(chosen) - len(problems)
+        if problems:
+            # Kept for the run after the rerun: some rows did go, so the page
+            # has to reload, and an error written here would vanish with it.
+            st.session_state["bulk_problem"] = (
+                f"Deleted {gone} of {len(chosen)}. These stayed: "
+                + "; ".join(f"{e.person} {e.date:%d %b %Y} — {why}"
+                            for e, why in problems)
+            )
+        else:
+            st.toast(f"{gone} entries deleted")
+        st.rerun()
+    if stop.button("Cancel", key=f"bno_{scope}", width="stretch"):
+        st.session_state[armed] = False
+        st.rerun()
 
 
 def attachment_is_stored(reference: str) -> bool:
@@ -515,16 +613,28 @@ def entry_table(entries: list, scope: str, *, empty: str = "Nothing here yet.") 
     if just:
         st.success(f"Updated {just}.")
 
+    trouble = st.session_state.pop("bulk_problem", None)
+    if trouble:
+        st.error(trouble)
+
     if not entries:
         st.caption(empty)
         return
 
+    # Held open above the list and filled at the end, once the tick boxes have
+    # been drawn and can say what is actually selected. The bar reads better
+    # above forty rows than below them, and this is the only way to have both.
+    bar = st.container()
+
     _head_row(_LEDGER_HEADS, _LEDGER_COLS)
 
+    chosen = []
     for entry in entries:
-        when, amount, book, note, edit, remove = st.columns(
+        pick, when, amount, book, note, edit, remove = st.columns(
             _LEDGER_COLS, vertical_alignment="center"
         )
+        if _pick_box(pick, entry, scope):
+            chosen.append(entry)
         outgoing = entry.signed_minor > 0
         when.markdown(
             f'<div class="khata-cell">{entry.date:%d %b %Y}</div>', unsafe_allow_html=True
@@ -560,6 +670,10 @@ def entry_table(entries: list, scope: str, *, empty: str = "Nothing here yet.") 
         with remove:
             delete_control(entry, scope)
         st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
+
+    if chosen:
+        with bar:
+            _bulk_delete_bar(chosen, scope)
 
 
 _SPEND_COLS = [2.3, 1.5, 1.7, 2.8, 1.35, 1.45]

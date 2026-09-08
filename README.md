@@ -111,6 +111,7 @@ amounts, and there is no way to read that screen which is true.
 | **Ledger** | Totals, per-person balances, and a drill-down into anyone's entries |
 | **Add entry** | The form. Clears itself after a save, ready for the next one |
 | **Edit entries** | Find a row by person, ledger, year or free text, then change or remove it |
+| Anywhere entries are listed | Tick several rows and delete them in one confirmed step. The confirmation lists every one by name and figure, and each is archived to **Deleted** before it goes |
 | **Assistant** | Say what happened, or upload a statement, and approve what it drafts |
 | **Interest** | What each person owes in interest, kept out of the ledger totals. Copy a whole month forward rather than retyping it |
 | **Spending** / **Add spending** | General expenses, deliberately kept out of the lending totals |

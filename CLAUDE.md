@@ -115,6 +115,26 @@ it. `archive.restore` rebuilds through the same `from_row` a sheet row goes
 through, then **appends**: everything below moved up when the row went, so the
 old row number means nothing. `views/deleted.py` is the dashboard.
 
+**Deleting several rows goes highest row number first** (`store.delete_many`,
+behind the tick boxes in `ui.entry_table`). Deleting row 5 moves row 6 up into
+5, so in ascending order every row number after the first is stale the moment it
+is used; downwards, everything still to be deleted sits *above* the row that
+just went, and nothing above a deleted row moves. `store.delete`'s guard turns
+the ascending version into a refusal rather than a disaster — but only because
+the rows happened to differ, and that is not a defence to build on.
+`tests/test_delete_many.py` uses a fake worksheet that **actually shifts its
+rows**, because one that merely records the numbers it was handed passes on any
+ordering at all. A failure in the middle of a selection does not stop the rest:
+each delete re-checks its own row, and every one that could not go is named.
+
+A tick is remembered by row number, so `ui.forget_picks()` clears every one
+after *any* deletion — the row a tick was put on is not the row that number
+means afterwards. The boxes are drawn **before** the bar that acts on them
+(filled into an `st.container()` held open above the list): Streamlit resets the
+state of any widget a run did not reach, so arming the confirmation with
+`st.rerun()` ahead of the loop unticked the whole selection and then asked about
+it.
+
 `store.delete` / `store.update` and their `spend` equivalents **re-read the row
 and confirm it still holds the expected entry before touching it.** Rows shift
 when anything above them is removed, and a stale row number would otherwise
