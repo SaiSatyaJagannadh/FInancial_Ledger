@@ -79,10 +79,25 @@ class FakeSheet:
 
 
 def wire(monkeypatch, rows) -> FakeSheet:
-    fake = FakeSheet({1: list(clearance.COLUMNS), **rows})
-    monkeypatch.setattr(store, "_open_worksheet", lambda _s, tab=None: fake)
+    """A whole fake workbook, one sheet per tab.
+
+    One fake standing in for every tab would let an archive write land in the
+    clearances tab and still look right — and the archive is the thing standing
+    between a mis-click and a lost record, so it gets its own sheet to land in.
+    The clearances sheet comes back; the rest hang off it as `.book`.
+    """
+    book: dict[str, FakeSheet] = {
+        clearance.WORKSHEET: FakeSheet({1: list(clearance.COLUMNS), **rows})
+    }
+
+    def open_worksheet(_secrets, tab=None):
+        return book.setdefault(tab or clearance.WORKSHEET, FakeSheet({}))
+
+    monkeypatch.setattr(store, "_open_worksheet", open_worksheet)
     monkeypatch.setattr(store, "_secrets", lambda: CONFIGURED)
-    return fake
+    mine = book[clearance.WORKSHEET]
+    mine.book = book
+    return mine
 
 
 def test_the_modules_self_check_passes():
@@ -140,6 +155,13 @@ def test_currencies_are_never_mixed():
     assert clearance.recorded_total(rows, Currency.USD) == 90_000
 
 
+#: The only modules allowed to know this tab exists. `archive` and the Deleted
+#: page *move* these rows — they hold a deleted one and put it back — which is
+#: not the same as adding them up. `compute`, `store`, `facts`, `export` and
+#: the assistant are the ones that must never appear here.
+MAY_TOUCH = ["ledger/archive.py", "views/clearance.py", "views/deleted.py"]
+
+
 def test_nothing_else_in_the_app_sums_these_rows():
     """The whole reason this tab exists is that it feeds no total. A future
     import into compute/store/facts is exactly the mistake to catch here."""
@@ -153,7 +175,7 @@ def test_nothing_else_in_the_app_sums_these_rows():
         )
         if name != "ledger/clearance.py"
     )
-    assert importers == ["views/clearance.py"], importers
+    assert importers == MAY_TOUCH, importers
 
 
 # --------------------------------------------------------------- writing to it
@@ -287,7 +309,8 @@ PAGE = str(Path(__file__).resolve().parent.parent / "views" / "clearance.py")
 
 SCREEN = [
     Clearance(date=date(2026, 3, 1), payer="RAVI", under="VIHAR",
-              amount_minor=250_000, note="old cash loan", row=2),
+              amount_minor=250_000, note="old cash loan",
+              attachment="sheet:ab12", row=2),
     Clearance(date=date(2026, 4, 9), payer="AMMA", under="VIHAR",
               amount_minor=150_000, row=3),
     Clearance(date=date(2026, 2, 2), payer="RAVI", under="CHAITU",
@@ -370,3 +393,129 @@ def test_a_filled_form_previews_what_it_will_record(monkeypatch):
     preview = " ".join(i.value for i in app.info)
     assert "₹2,500.00" in preview and "filed under" in preview
     assert "no total elsewhere changes" in preview
+
+# ------------------------------------------------- the archive, and the photo
+
+def test_a_deleted_record_is_archived_before_the_row_goes(monkeypatch):
+    from ledger import archive
+
+    fake = wire(monkeypatch, {4: ["2026-03-01", "RAVI", "VIHAR", "2500.00", "INR"]})
+    record = make(note="old college loan", attachment="sheet:ab12")
+    clearance.remove(record)
+
+    kept = fake.book[archive.WORKSHEET].appended
+    assert len(kept) == 1, kept
+    stored = archive.Deletion.from_row(dict(zip(archive.COLUMNS, kept[0])))
+    assert stored.kind == archive.CLEARANCE
+    assert stored.source_row == 4
+    assert stored.data == record.to_row(), "the row must be kept exactly as it was"
+    assert "under VIHAR" in stored.summary
+    assert fake.deleted == [4]
+
+
+def test_a_failed_archive_stops_the_deletion(monkeypatch):
+    """The whole bargain of the archive: when both cannot happen, the row
+    stays. A notice that fails costs a message; this would cost the record."""
+    from ledger import archive
+
+    fake = wire(monkeypatch, {4: ["2026-03-01", "RAVI", "VIHAR", "2500.00", "INR"]})
+
+    def refuse(*a, **kw):
+        raise RuntimeError("the deleted tab is unreachable")
+
+    monkeypatch.setattr(archive, "record", refuse)
+    with pytest.raises(RuntimeError, match="unreachable"):
+        clearance.remove(make())
+    assert fake.deleted == [], "the row must still be on the sheet"
+
+
+def test_an_archived_clearance_rebuilds_into_the_same_row(monkeypatch):
+    """A restore is not an approximation — it goes back through `from_row`."""
+    from ledger import archive
+
+    fake = wire(monkeypatch, {4: ["2026-03-01", "RAVI", "VIHAR", "2500.00", "INR"]})
+    original = make(note="cash, at home", attachment="sheet:ab12")
+    clearance.remove(original)
+
+    kept = archive.Deletion.from_row(
+        dict(zip(archive.COLUMNS, fake.book[archive.WORKSHEET].appended[0])))
+    back = archive.rebuild(kept)
+    assert back.to_row() == original.to_row()
+    assert back.attachment == "sheet:ab12" and back.note == "cash, at home"
+    assert back.amount_minor == original.amount_minor
+
+
+def test_the_attachment_survives_the_sheet(monkeypatch):
+    wire(monkeypatch, {})
+    clearance.add(make(row=None, attachment="sheet:ab12"))
+    rows, problems = clearance.load()
+    assert problems == [] and rows[0].attachment == "sheet:ab12"
+
+
+def test_a_row_written_before_the_attachment_column_existed_still_reads(monkeypatch):
+    """`attachment` was appended last for exactly this: an older seven-cell row
+    reads as having none, rather than shifting `note` and `source` along."""
+    wire(monkeypatch, {2: ["2026-03-01", "RAVI", "VIHAR", "2500.00", "INR",
+                           "old loan", "manual"]})
+    rows, problems = clearance.load()
+    assert problems == []
+    assert rows[0].attachment == "" and rows[0].note == "old loan"
+    assert rows[0].source == "manual"
+
+def test_the_filed_under_filter_narrows_to_one_name(monkeypatch):
+    app = on_screen(monkeypatch)
+    assert app.selectbox(key="cl_f_under").options == [
+        "Everyone", "ammu", "CHAITU", "VIHAR"
+    ]
+    app.selectbox(key="cl_f_under").select("CHAITU").run()
+    assert not app.exception, [str(e.message) for e in app.exception]
+    assert [e.label for e in app.expander] == ["CHAITU — ₹500.00 · 1 record"]
+
+
+def test_the_who_gave_it_filter_narrows_to_one_payer(monkeypatch):
+    app = on_screen(monkeypatch)
+    assert app.selectbox(key="cl_f_payer").options == ["Anyone", "AMMA", "RAVI"]
+    app.selectbox(key="cl_f_payer").select("AMMA").run()
+    assert not app.exception, [str(e.message) for e in app.exception]
+    # AMMA gave only the one, so VIHAR's group drops to it alone.
+    assert [e.label for e in app.expander] == ["VIHAR — ₹1,500.00 · 1 record"]
+    assert "From: AMMA" in [c.value for c in app.caption]
+
+
+def test_the_filters_only_offer_names_in_the_currency_on_screen(monkeypatch):
+    """A name that would empty the page the moment it is picked is not a
+    filter, it is a trap."""
+    app = on_screen(monkeypatch)
+    app.radio(key="cl_currency").set_value("USD").run()
+    assert not app.exception, [str(e.message) for e in app.exception]
+    assert app.selectbox(key="cl_f_under").options == ["Everyone", "VIHAR"]
+
+
+def test_the_search_box_looks_in_the_note_and_the_names(monkeypatch):
+    app = on_screen(monkeypatch)
+    app.text_input(key="cl_search").set_value("old cash").run()
+    assert not app.exception, [str(e.message) for e in app.exception]
+    assert [e.label for e in app.expander] == ["VIHAR — ₹2,500.00 · 1 record"]
+
+
+def test_filters_that_match_nothing_say_so_rather_than_showing_an_empty_page(monkeypatch):
+    app = on_screen(monkeypatch)
+    app.text_input(key="cl_search").set_value("nothing like this").run()
+    assert not app.exception, [str(e.message) for e in app.exception]
+    assert any("Nothing matches" in i.value for i in app.info)
+    assert not app.expander
+
+
+def test_a_stored_photo_is_offered_on_its_row_and_fetched_only_when_asked(monkeypatch):
+    """The file is reassembled from the sheet on click, never on page load —
+    a list of photos fetched eagerly is a page that crawls."""
+    app = on_screen(monkeypatch)
+    assert "📎 View / download" in [b.label for b in app.button]
+    assert app.button(key="cl_att_2") is not None
+
+
+def test_the_form_offers_a_photo_and_a_link(monkeypatch):
+    app = on_screen(monkeypatch, rows=[])
+    assert app.text_input(key="cl_link") is not None
+    labels = " ".join(str(w.label) for w in app.get("file_uploader"))
+    assert "Photo or receipt" in labels, labels

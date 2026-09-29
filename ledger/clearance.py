@@ -32,7 +32,14 @@ from ledger.money import Currency, format_money, parse_currency, to_minor
 #: Its own tab, alongside the ledger's. Never merged with one of the others.
 WORKSHEET = "clearances"
 
-COLUMNS = ["date", "payer", "under", "amount", "currency", "note", "source"]
+#: `attachment` is appended **last**, not slotted in beside `currency` where it
+#: would read better. A row written before it existed is seven cells long, and
+#: if the header is ever unreadable `store.records` falls back to reading by
+#: position — where an inserted column would have shifted `source` and `note`
+#: one place along and quietly relabelled them. A column added at the end can
+#: only ever be missing, which reads as "".
+COLUMNS = ["date", "payer", "under", "amount", "currency", "note", "source",
+           "attachment"]
 
 #: A record with no names or no figure records nothing.
 REQUIRED = ("date", "payer", "under", "amount")
@@ -47,6 +54,9 @@ class Clearance:
     currency: Currency = Currency.INR
     note: str = ""
     source: str = ""
+    #: A receipt or a photo of the handover. Either `sheet:<id>` for a file in
+    #: the workbook, or an http(s) link somebody keeps elsewhere.
+    attachment: str = ""
     row: int | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
@@ -81,6 +91,7 @@ class Clearance:
             currency=parse_currency(row.get("currency")),
             note=str(row.get("note") or "").strip(),
             source=str(row.get("source") or "").strip().lower(),
+            attachment=str(row.get("attachment") or "").strip(),
             row=row_number,
         )
 
@@ -95,6 +106,7 @@ class Clearance:
             self.currency.value,
             self.note,
             self.source,
+            self.attachment,
         ]
 
 
@@ -224,6 +236,12 @@ def remove(record: Clearance, secrets: dict | None = None) -> None:
             f"Row {record.row} no longer matches — the sheet changed since it "
             "was loaded. Reload and try again."
         )
+    # Archived *before* the row goes, and a failure here stops the deletion —
+    # the same bargain the ledger and the interest tab make. A notice that
+    # fails costs a message; an archive that fails costs the record.
+    from ledger import archive
+
+    archive.record(archive.CLEARANCE, record, secrets)
     sheet.delete_rows(record.row)
     _announce("deleted", before=record, secrets=secrets)
 
@@ -249,6 +267,15 @@ def demo() -> None:
     # Clearing your own old debt is a real thing to record, not a typo.
     assert Clearance(date=date(2026, 3, 1), payer="RAVI", under="RAVI",
                      amount_minor=100).under == "RAVI"
+
+    # An attachment survives the round trip, and a row written before the
+    # column existed still reads — it is simply missing, which is "".
+    with_file = Clearance(date=date(2026, 3, 1), payer="RAVI", under="VIHAR",
+                          amount_minor=250_000, attachment="sheet:ab12")
+    assert Clearance.from_row(
+        dict(zip(COLUMNS, with_file.to_row()))).attachment == "sheet:ab12"
+    seven = dict(zip(COLUMNS, with_file.to_row()[:7]))
+    assert Clearance.from_row(seven).attachment == ""
 
     # Round-trips through the same door a sheet row goes through.
     back = Clearance.from_row(dict(zip(COLUMNS, c.to_row())))

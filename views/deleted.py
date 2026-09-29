@@ -1,9 +1,9 @@
 """What has been deleted, and a way to put it back.
 
 Deleting asks twice, but a spreadsheet has no undo and the second click is
-still a click. Every removal from the ledger and the interest tab is archived
-before the row goes, so this page is the record of what was taken out — when,
-by whom when there is a sign-in, and exactly what it said.
+still a click. Every removal from the ledger, the interest tab and the debt
+clearances is archived before the row goes, so this page is the record of what
+was taken out — when, by whom when there is a sign-in, and exactly what it said.
 """
 
 from __future__ import annotations
@@ -14,7 +14,15 @@ from ledger import archive
 from ledger.ui import clear_cache, demo_banner, esc, load_ledger, styles
 
 ANY_KIND = "Everything"
-KINDS = {archive.ENTRY: "Ledger entries", archive.INTEREST: "Interest charges"}
+KINDS = {
+    archive.ENTRY: "Ledger entries",
+    archive.INTEREST: "Interest charges",
+    archive.CLEARANCE: "Debt clearances",
+}
+
+#: The same kinds, short enough to fit three in one metric label.
+SHORT = {archive.ENTRY: "Ledger", archive.INTEREST: "Interest",
+         archive.CLEARANCE: "Clearances"}
 
 styles()
 
@@ -23,8 +31,8 @@ demo_banner(result)
 
 st.title("Deleted")
 st.caption(
-    "Everything removed from the ledger or the interest tab, newest first. "
-    "Restoring writes the record back as a new row."
+    "Everything removed from the ledger, the interest tab or the debt "
+    "clearances, newest first. Restoring writes the record back as a new row."
 )
 
 if result.demo:
@@ -77,10 +85,11 @@ if search.strip():
 
 count_col, kinds_col, last_col = st.columns(3)
 count_col.metric("Showing", f"{len(shown)} of {len(gone)}")
+# Counted from KINDS rather than spelled out, so a fourth kind of deletion
+# appears here the moment it is archived instead of when somebody remembers.
 kinds_col.metric(
-    "Ledger / interest",
-    f"{sum(1 for d in shown if d.kind == archive.ENTRY)}"
-    f" / {sum(1 for d in shown if d.kind == archive.INTEREST)}",
+    " / ".join(SHORT.get(k, KINDS[k]) for k in KINDS),
+    " / ".join(str(sum(1 for d in shown if d.kind == k)) for k in KINDS),
 )
 last_col.metric("Most recent", gone[0].when if gone else "—")
 
@@ -127,9 +136,11 @@ for item in shown:
                     clear_cache()
                     st.session_state[armed] = False
                     st.session_state["restored"] = True
+                    # A clearance has a payer where an entry has a person.
+                    named = (getattr(back, "person", "")
+                             or getattr(back, "payer", "") or "the record")
                     st.session_state["restored_text"] = (
-                        f"Restored {getattr(back, 'person', 'the record')} — "
-                        "it is back on the sheet as a new row."
+                        f"Restored {named} — it is back on the sheet as a new row."
                     )
                     st.rerun()
             if st.button("Cancel", key=f"rn_{item.row}", width="stretch"):

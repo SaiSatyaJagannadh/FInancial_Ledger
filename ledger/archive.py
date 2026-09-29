@@ -33,6 +33,7 @@ COLUMNS = ["deleted_at", "kind", "by", "summary", "source_row", "data"]
 #: What was removed. The value is stored, so do not rename these.
 ENTRY = "entry"
 INTEREST = "interest"
+CLEARANCE = "clearance"
 
 
 @dataclass(frozen=True)
@@ -97,8 +98,14 @@ def summarise(record) -> str:
     from ledger.money import format_money
 
     try:
-        who = getattr(record, "person", "") or ""
         amount = format_money(record.amount_minor, record.currency)
+        # A clearance has no person and no ledger: it has the two ends of a
+        # handover, and which name it was filed under is the thing somebody
+        # will be looking for six months later.
+        under = getattr(record, "under", "")
+        if under:
+            return f"{getattr(record, 'payer', '')} · {amount} · under {under}"
+        who = getattr(record, "person", "") or ""
         where = getattr(record, "ledger", "") or getattr(record, "month_label", "")
         direction = getattr(record, "direction", None)
         verb = ""
@@ -177,6 +184,10 @@ def rebuild(deletion: Deletion):
         from ledger.interest import COLUMNS as SHAPE, Charge
 
         builder = Charge
+    elif deletion.kind == CLEARANCE:
+        from ledger.clearance import COLUMNS as SHAPE, Clearance
+
+        builder = Clearance
     else:
         raise EntryError(f"unknown kind {deletion.kind!r}")
 
@@ -191,13 +202,15 @@ def restore(deletion: Deletion, secrets: dict | None = None):
     row moved up when it was removed, so the number means nothing now — the
     same reason `store.update` refuses to trust a stale one.
     """
-    from ledger import interest, store
+    from ledger import clearance, interest, store
 
     secrets = store._secrets() if secrets is None else secrets
     record_ = rebuild(deletion)
 
     if deletion.kind == ENTRY:
         store.append(record_, secrets)
+    elif deletion.kind == CLEARANCE:
+        clearance.add(record_, secrets)
     else:
         interest.add(record_, secrets)
 
@@ -209,14 +222,16 @@ def restore(deletion: Deletion, secrets: dict | None = None):
 def _announce(kind: str, record_, secrets: dict | None) -> None:
     """A record coming back is as worth hearing about as one going away."""
     try:
-        from ledger import interest, notify
+        from ledger import clearance, interest, notify
         from ledger.models import COLUMNS as ENTRY_COLUMNS
 
-        notify.changed(
-            "Ledger entry" if kind == ENTRY else "Interest charge",
-            "restored", after=record_, secrets=secrets,
-            columns=ENTRY_COLUMNS if kind == ENTRY else interest.COLUMNS,
-        )
+        name, columns = {
+            ENTRY: ("Ledger entry", ENTRY_COLUMNS),
+            INTEREST: ("Interest charge", interest.COLUMNS),
+            CLEARANCE: ("Debt clearance", clearance.COLUMNS),
+        }[kind]
+        notify.changed(name, "restored", after=record_, secrets=secrets,
+                       columns=columns)
     except Exception:  # noqa: BLE001 — a notice must never undo a write
         pass
 
@@ -296,6 +311,23 @@ def demo() -> None:
     rebuilt = rebuild(Deletion.from_row(dict(zip(COLUMNS, kept_charge.to_row()))))
     assert rebuilt.to_row() == charge.to_row()
     assert rebuilt.person == "Narayana"
+
+    # A debt clearance goes the same way, through its own shape — and its
+    # summary names the person it was filed under, which is what somebody
+    # reading the archive is looking for.
+    from ledger.clearance import Clearance
+
+    cleared = Clearance(date=date(2026, 3, 1), payer="RAVI", under="VIHAR",
+                        amount_minor=250_000, attachment="sheet:ab12", row=9)
+    kept_clearance = Deletion(deleted_at=datetime(2026, 9, 4, 8, 0), kind=CLEARANCE,
+                              by="", summary=summarise(cleared), source_row=9,
+                              data=cleared.to_row())
+    rebuilt_clearance = rebuild(
+        Deletion.from_row(dict(zip(COLUMNS, kept_clearance.to_row()))))
+    assert rebuilt_clearance.to_row() == cleared.to_row()
+    assert rebuilt_clearance.attachment == "sheet:ab12", "the receipt comes back too"
+    assert "under VIHAR" in kept_clearance.summary, kept_clearance.summary
+    assert "2,500" in kept_clearance.summary
 
     # Nonsense must say so rather than restore something plausible.
     for bad in (Deletion(datetime.now(), "nonsense", "", "", None, ["x"]),

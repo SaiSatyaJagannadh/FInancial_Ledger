@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~782)
+.venv/bin/python -m pytest -q                     # all tests (~794)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -110,8 +110,8 @@ halves to reconcile.
 (`ledger/archive.py`). This is the exact opposite of how `notify` is treated,
 and deliberately: a notification that fails costs a message, a deletion that
 fails to archive costs the record. The `deleted` tab keeps the original cells
-as JSON in one column — the two source tabs have different shapes and both gain
-columns, and a restore needs the row as it was rather than an interpretation of
+as JSON in one column — the three source tabs (`entries`, `interest`,
+`clearances`) have different shapes and all gain columns, and a restore needs the row as it was rather than an interpretation of
 it. `archive.restore` rebuilds through the same `from_row` a sheet row goes
 through, then **appends**: everything below moved up when the row went, so the
 old row number means nothing. `views/deleted.py` is the dashboard.
@@ -236,6 +236,22 @@ because the question is "what is filed under Vihar" and not "who is the
 largest". The two may be the same person; clearing your own old debt is a
 legitimate thing to write down, so it is not refused. Edits are delete and
 retype: a five-field record does not need a second write path.
+
+**A deletion here is archived first, exactly like the ledger's.** A clearance
+is often the only record that the money moved at all — there is no second row
+anywhere to reconcile it against — so `clearance.remove` writes
+`archive.CLEARANCE` before `delete_rows` and a failed archive stops the
+deletion. `archive.rebuild` knows its shape and `archive.restore` puts it back
+through `clearance.add`; `views/deleted.py` lists it beside the other two.
+
+**`attachment` is appended last in `COLUMNS`, not slotted in beside
+`currency`** where it would read better. A row written before the column
+existed is seven cells long, and if the header is ever unreadable
+`store.records` falls back to reading by *position* — where an inserted column
+would have shifted `source` and `note` one place along and quietly relabelled
+them. A column added at the end can only ever be missing, which reads as `""`.
+The photo matters here more than elsewhere for the same reason the archive
+does: it is often the only proof of a handover that was never a ledger row.
 
 ### Answering questions (`ledger/facts.py`)
 

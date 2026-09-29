@@ -11,14 +11,18 @@ cabinet, and the question it answers is "what is filed under Vihar".
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import streamlit as st
 
-from ledger import clearance
+from ledger import attach, clearance
 from ledger.models import BY_HAND, EntryError
 from ledger.money import Currency, format_money, spoken, to_minor
-from ledger.ui import demo_banner, esc, load_ledger, styles
+from ledger.ui import (
+    attachment_button, attachment_is_stored, demo_banner, esc, load_ledger,
+    safe_href, styles,
+)
 
 NEW = "➕ New…"
 
@@ -90,6 +94,20 @@ when = st.date_input("Date *", value=date.today(), format="DD/MM/YYYY", key="cl_
 note = st.text_input("Note", placeholder="What the old debt was, how it was paid",
                      key="cl_note")
 
+link = st.text_input(
+    "Attachment link", key="cl_link", placeholder="https://… (optional)",
+    help="A receipt you keep elsewhere. Or upload the photo itself below.",
+)
+receipt = st.file_uploader(
+    "Photo or receipt of the handover",
+    type=["pdf", "png", "jpg", "jpeg", "webp"], key="cl_file",
+    help=(
+        f"Kept inside the spreadsheet, up to {attach.MAX_BYTES // 1024} KB. "
+        "A clearance is often the only proof the money moved, so a photo of "
+        "the note or the transfer is worth having."
+    ),
+)
+
 missing: list[str] = []
 if not str(payer).strip():
     missing.append("Who gave it")
@@ -103,7 +121,8 @@ if not missing:
     try:
         record = clearance.Clearance(
             date=when, payer=str(payer).strip(), under=str(under).strip(),
-            amount_minor=typed, currency=currency, note=note.strip(), source=BY_HAND,
+            amount_minor=typed, currency=currency, note=note.strip(),
+            attachment=link.strip(), source=BY_HAND,
         )
     except EntryError as exc:
         missing.append(str(exc))
@@ -119,6 +138,14 @@ elif missing:
 
 if st.button("Save record", type="primary", disabled=record is None):
     try:
+        if receipt is not None:
+            # Store the file first: a row pointing at a photo that never
+            # arrived is worse than failing before anything is written.
+            with st.spinner(f"Storing {receipt.name}…"):
+                record = replace(record, attachment=attach.put(
+                    receipt.name, receipt.getvalue(),
+                    receipt.type or "application/octet-stream",
+                ))
         clearance.add(record)
     except Exception as exc:  # noqa: BLE001 — surface whatever the sheet said
         st.error(f"Could not save: {type(exc).__name__}: {exc}")
@@ -135,16 +162,44 @@ if not rows:
     st.caption("Nothing recorded yet.")
     st.stop()
 
-head, year_col = st.columns([3, 1.4], vertical_alignment="bottom")
-with head:
-    st.subheader(f"{currency.flag}  Filed under each name")
-with year_col:
-    year = st.selectbox("Year", ["All years", *clearance.years(rows)],
-                        label_visibility="collapsed", key="cl_year")
+st.subheader(f"{currency.flag}  Filed under each name")
 
-shown = [c for c in rows if c.currency is currency]
+# The people filters run over the rows in *this currency*, so the lists never
+# offer a name that would empty the page the moment it is picked.
+mine = [c for c in rows if c.currency is currency]
+ANYONE, EVERYONE = "Anyone", "Everyone"
+
+under_col, payer_col, year_col, search_col = st.columns([1.6, 1.6, 1.1, 2])
+with under_col:
+    filed = st.selectbox(
+        "Filed under", [EVERYONE, *sorted({c.under for c in mine}, key=str.casefold)],
+        key="cl_f_under", help="Whose old debt the money cleared.",
+    )
+with payer_col:
+    gave = st.selectbox(
+        "Who gave it", [ANYONE, *sorted({c.payer for c in mine}, key=str.casefold)],
+        key="cl_f_payer", help="The person who handed it over.",
+    )
+with year_col:
+    year = st.selectbox("Year", ["All years", *clearance.years(mine)], key="cl_year")
+with search_col:
+    search = st.text_input("Search", placeholder="A name, an amount, a note",
+                           key="cl_search")
+
+shown = mine
+if filed != EVERYONE:
+    shown = [c for c in shown if c.under == filed]
+if gave != ANYONE:
+    shown = [c for c in shown if c.payer == gave]
 if year != "All years":
     shown = [c for c in shown if c.date.year == int(year)]
+if search.strip():
+    needle = search.strip().lower()
+    shown = [
+        c for c in shown
+        if needle in c.note.lower() or needle in c.payer.lower()
+        or needle in c.under.lower() or needle in c.money().lower()
+    ]
 
 if not shown:
     st.info("Nothing matches those filters. Widen them and it comes back.")
@@ -170,8 +225,8 @@ for bucket in groups:
     ):
         st.caption("From: " + ", ".join(bucket["payers"]))
         for c in of_group:
-            when_col, amount_col, payer_col, note_col, remove_col = st.columns(
-                [1.3, 1.3, 1.5, 2.4, 1], vertical_alignment="center"
+            when_col, amount_col, payer_col, note_col, file_col, remove_col = (
+                st.columns([1.2, 1.2, 1.4, 2.1, 1.3, 1], vertical_alignment="center")
             )
             when_col.markdown(
                 f'<div class="khata-cell">{c.date:%d %b %Y}</div>',
@@ -189,8 +244,23 @@ for bucket in groups:
                 f'<div class="khata-cell khata-meta">{esc(c.note) or "—"}</div>',
                 unsafe_allow_html=True,
             )
+            with file_col:
+                # Fetched only when asked for: reassembling every photo on
+                # every page load would make a long list crawl.
+                if attachment_is_stored(c.attachment):
+                    attachment_button(c.attachment, key=f"cl_att_{c.row}")
+                elif c.attachment:
+                    href = safe_href(c.attachment)
+                    st.markdown(
+                        f'<div class="khata-cell khata-meta">'
+                        f'<a href="{href}" target="_blank">📎 link</a></div>'
+                        if href else
+                        '<div class="khata-cell khata-meta">📎 —</div>',
+                        unsafe_allow_html=True,
+                    )
             with remove_col:
-                # Two clicks, like everywhere else — the sheet has no undo.
+                # Two clicks, like everywhere else — and the row is archived
+                # to the Deleted page before it goes, so this is recoverable.
                 armed = f"cl_arm_{c.row}"
                 if not st.session_state.get(armed):
                     if c.row is not None and st.button("Delete", key=f"cl_del_{c.row}",
@@ -199,7 +269,8 @@ for bucket in groups:
                         st.rerun()
                 else:
                     if st.button("Delete it", key=f"cl_yes_{c.row}", type="primary",
-                                 width="stretch"):
+                                 width="stretch",
+                                 help="Kept on the Deleted page, and restorable"):
                         try:
                             clearance.remove(c)
                         except Exception as exc:  # noqa: BLE001
