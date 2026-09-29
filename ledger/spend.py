@@ -297,12 +297,7 @@ def _sheet(secrets: dict):
         raise RuntimeError("Demo mode: there is no sheet to write to.")
     sheet = store._open_worksheet(secrets, WORKSHEET)
     first = []
-    try:
-        first = sheet.row_values(1)
-    except Exception:  # noqa: BLE001 — a brand new tab has no rows at all
-        first = []
-    if not any(str(v).strip() for v in first):
-        sheet.update(values=[COLUMNS], range_name="A1")
+    store.ensure_header(sheet, COLUMNS)
     return sheet
 
 
@@ -353,7 +348,7 @@ def remove(transaction: Transaction, secrets: dict | None = None) -> None:
             f"Row {transaction.row} no longer matches — the sheet changed since "
             "it was loaded. Reload and try again."
         )
-    sheet.delete_rows(transaction.row)
+    store.delete_row(sheet, transaction.row)
     _announce("Spending", "deleted", before=transaction, secrets=secrets)
 
 
@@ -371,8 +366,6 @@ def replace_row(original: Transaction, edited: Transaction, secrets: dict | None
         )
     row = edited.to_row()
     last = store._column_letter(len(row))
-    sheet.update(
-        values=[row], range_name=f"A{original.row}:{last}{original.row}",
-        value_input_option="USER_ENTERED",
-    )
+    store.write_cells(sheet, [row], f"A{original.row}:{last}{original.row}",
+                      "USER_ENTERED")
     _announce("Spending", "edited", before=original, after=edited, secrets=secrets)

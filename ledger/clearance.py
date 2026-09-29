@@ -180,12 +180,7 @@ def _sheet(secrets: dict):
     if not store.is_configured(secrets):
         raise RuntimeError("Demo mode: there is no sheet to write to.")
     sheet = store._open_worksheet(secrets, WORKSHEET)
-    try:
-        first = sheet.row_values(1)
-    except Exception:  # noqa: BLE001 — a brand new tab has no rows at all
-        first = []
-    if not any(str(v).strip() for v in first):
-        sheet.update(values=[COLUMNS], range_name="A1")
+    store.ensure_header(sheet, COLUMNS)
     return sheet
 
 
@@ -250,10 +245,8 @@ def replace_row(original: Clearance, edited: Clearance,
         )
     row = edited.to_row()
     last = store._column_letter(len(row))
-    sheet.update(
-        values=[row], range_name=f"A{original.row}:{last}{original.row}",
-        value_input_option="USER_ENTERED",
-    )
+    store.write_cells(sheet, [row], f"A{original.row}:{last}{original.row}",
+                      "USER_ENTERED")
     _announce("edited", before=original, after=edited, secrets=secrets)
 
 
@@ -275,7 +268,7 @@ def remove(record: Clearance, secrets: dict | None = None) -> None:
     from ledger import archive
 
     archive.record(archive.CLEARANCE, record, secrets)
-    sheet.delete_rows(record.row)
+    store.delete_row(sheet, record.row)
     _announce("deleted", before=record, secrets=secrets)
 
 

@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~832)
+.venv/bin/python -m pytest -q                     # all tests (~845)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -144,6 +144,44 @@ mutate a stranger's record.
 The amount in that check is compared **numerically, not as text**: Sheets
 returns `42` for what was written as `42.00`, so a string comparison passes
 against a test fake and fails against the real sheet.
+
+### Speed: it is round trips, not rate limits
+
+Every operation is a run of **sequential** HTTPS calls to Google, and the count
+is the wait a person sees. A delete used to cost eight, and most of them bought
+nothing:
+
+| Was paid for, every time | Why it was waste |
+|---|---|
+| `book.worksheet("entries")` | gspread's `open_by_key` is free, but `.worksheet()` calls `fetch_sheet_metadata` — a round trip — on **every** call. Which tab is `entries` does not change while the app runs |
+| `sheet.row_values(1)` before each write | Eight modules each asked "does this tab have a header yet?" on every write. Once it is yes it stays yes |
+| A full tab read per keystroke | Streamlit re-runs the whole script on every widget change, and `interest.load()` / `people.load()` were uncached — so typing in a filter re-read the tab letter by letter |
+
+So there are three caches, all in `store.py`: `_SHEETS` (tab handles),
+`_HEADERS` (headers known present) and `_ROWS` (tab contents, for
+`READ_SECONDS`). A tab read costs **2 trips cold and 0 warm**, an append 3 and
+1, a delete 6 and 3 — the warm three being the guard read, the archive and the
+removal, none of which can go. `tests/test_round_trips.py` counts these with a
+fake that charges for a metadata fetch exactly where gspread does, and fails if
+an operation starts costing more than it did — the regression that is otherwise
+invisible, because everything still works, just slower, for ever.
+
+**Every write goes through one of three doors**: `append_rows`, `write_cells`
+and `delete_row`. That is not tidiness — each one calls `forget_rows()`, so
+held rows can never outlive a change, and a call site that has to remember is
+one that will not. Do not call `worksheet.update` or `worksheet.delete_rows`
+directly; the tests check the doors, not the call sites. The retrying HTTP
+client clears them too, on any non-GET, which catches anything that slips past.
+
+`store.ON_WRITE` carries the same news to `ui._cached_load`, registered by `ui`
+rather than imported by `store` — so a row somebody just saved is on the screen
+they land on instead of up to a minute later.
+
+The cache is keyed by `_tab_identity`, which stamps an id onto anything that is
+not a real `Worksheet` — **never `id(sheet)`**, because CPython reuses the id of
+a collected object and one test's rows were served to the next. The guards that
+protect money do not read through any of this: `delete` and `update` re-read
+their row with `row_values`, which is never cached.
 
 ### Google's 503s
 

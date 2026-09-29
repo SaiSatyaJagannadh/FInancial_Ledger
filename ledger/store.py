@@ -8,6 +8,7 @@ wire up a sheet.
 from __future__ import annotations
 
 import time
+import uuid
 from dataclasses import dataclass
 
 from ledger.demo import build_demo_entries
@@ -95,6 +96,92 @@ RETRY_WAITS = (0.4, 1.0, 2.5)
 _CLIENTS: dict = {}
 _RETRYING_CLIENT = None
 
+#: Tab handles, keyed by workbook and tab name. gspread's `open_by_key` is
+#: free — it builds an object out of the id — but `book.worksheet(name)` calls
+#: `fetch_sheet_metadata`, a full round trip to Google, **every time**. The
+#: answer to "which tab is `entries`?" does not change while the app is running,
+#: and paying for it before every read, every write and every guard was most of
+#: what made a delete feel slow: eight sequential trips, three of them this.
+_SHEETS: dict = {}
+
+#: Tab contents, by (workbook, tab, shape), with the moment they were read.
+#: Every module's `load()` comes through `records()`, and Streamlit re-runs the
+#: whole script on every keystroke — so typing in a filter box was re-reading
+#: the tab from Google on each letter. Held for `READ_SECONDS`, and dropped the
+#: instant anything writes, so it can be stale only against a hand edit made
+#: directly in the sheet.
+_ROWS: dict = {}
+
+#: The same minute the ledger's own cache uses. Long enough to make a page feel
+#: immediate, short enough that an edit somebody makes in the sheet itself
+#: shows up while they are still looking at it.
+READ_SECONDS = 60
+
+#: Tabs whose header row is known to be there, by (workbook, tab). Every write
+#: path used to re-read row 1 to ask "does this tab have a header yet?" — once
+#: the answer is yes it stays yes, and the read was another trip per write.
+_HEADERS: set = set()
+
+
+def forget_sheets() -> None:
+    """Drop the cached tab handles and header checks.
+
+    Called when Google says a tab is gone — renamed or deleted from under us —
+    so the next attempt resolves it again rather than retrying a stale id for
+    the life of the process. The tests call it between cases for the same
+    reason: cached state that outlives its subject is a lie.
+    """
+    _SHEETS.clear()
+    _HEADERS.clear()
+    _ROWS.clear()
+
+
+def _tab_identity(sheet):
+    """A key for this exact tab that stays valid for as long as the object does.
+
+    A real `Worksheet` is identified by its workbook and title, which is what
+    the cache should key on. Anything else — a test double, most obviously —
+    gets a fresh id stamped onto it and keeps it. **Not `id(sheet)`:** CPython
+    reuses the id of a collected object, so two unrelated sheets could share a
+    key and one test's rows would be served to the next. That is precisely the
+    kind of cache bug that only appears when the suite is run in a certain
+    order, and it appeared.
+
+    Returns None when the object will not take a stamp, which means "do not
+    cache this" rather than "cache it under a guess".
+    """
+    book = getattr(sheet, "spreadsheet_id", None)
+    if not book:
+        book = getattr(sheet, "_ledger_tab_id", None)
+        if not book:
+            book = f"local-{uuid.uuid4().hex}"
+            try:
+                sheet._ledger_tab_id = book
+            except Exception:  # noqa: BLE001 — __slots__, a proxy, anything
+                return None
+    return (book, str(getattr(sheet, "title", "")))
+
+
+#: Run after any write. `ui` registers its Streamlit cache clearer here, so a
+#: row somebody just saved is on the screen they land on rather than up to a
+#: minute later. A list rather than an import, because `ui` imports `store`.
+ON_WRITE: list = []
+
+
+def forget_rows() -> None:
+    """Drop every cached tab, so the next read goes to Google.
+
+    Called after **any** write, from the doors every write goes through — the
+    same discipline as retrying and as `append_rows`: a call site that has to
+    remember is a call site that will not.
+    """
+    _ROWS.clear()
+    for hook in ON_WRITE:
+        try:
+            hook()
+        except Exception:  # noqa: BLE001 — a cold cache must never fail a save
+            pass
+
 
 def _retrying_http_client():
     """gspread's HTTP client, with transient Google failures retried.
@@ -112,12 +199,27 @@ def _retrying_http_client():
     from gspread.http_client import HTTPClient
 
     class _Retrying(HTTPClient):
+        def _answer(self, method, endpoint, *args, **kwargs):
+            reply = super().request(method, endpoint, *args, **kwargs)
+            # Anything that is not a read has changed the workbook, so every
+            # cached tab is now suspect. One place, so nothing can forget.
+            if method.upper() not in ("GET", "HEAD"):
+                forget_rows()
+            return reply
+
         def request(self, method, endpoint, *args, **kwargs):
             for wait in RETRY_WAITS:
                 try:
-                    return super().request(method, endpoint, *args, **kwargs)
+                    return self._answer(method, endpoint, *args, **kwargs)
                 except APIError as exc:
                     if exc.code not in RETRY_CODES:
+                        # A 400 or 404 here can mean the cached tab handle
+                        # points at something that is no longer there. Drop the
+                        # cache on the way out so the next attempt re-resolves
+                        # it, rather than a renamed tab breaking every call for
+                        # the life of the process.
+                        if exc.code in (400, 404):
+                            forget_sheets()
                         raise          # a 404 or a revoked key will never pass
                 except (requests.ConnectionError, requests.Timeout):
                     # The reply was lost, so we cannot know whether the write
@@ -128,7 +230,7 @@ def _retrying_http_client():
                 time.sleep(wait)
             # The last attempt is not wrapped: whatever it raises is the real
             # answer, and by now it has earned its way to the page.
-            return super().request(method, endpoint, *args, **kwargs)
+            return self._answer(method, endpoint, *args, **kwargs)
 
     _RETRYING_CLIENT = _Retrying
     return _RETRYING_CLIENT
@@ -166,19 +268,61 @@ def _open_worksheet(secrets: dict, tab: str | None = None):
 
     account = dict(secrets["gcp_service_account"])
     sheet = dict(secrets["sheet"])
-    client = _client(account)
-
-    book = client.open_by_url(sheet["url"]) if sheet.get("url") else client.open_by_key(sheet["id"])
     name = tab or sheet.get("worksheet")
+
+    # Resolved once per process. See `_SHEETS` for what this saves and why it
+    # is safe: a Worksheet holds the workbook id and the tab id, and every
+    # operation addresses the tab by those rather than by position.
+    key = (sheet.get("url") or sheet.get("id"), name)
+    cached = _SHEETS.get(key)
+    if cached is not None:
+        return cached
+
+    client = _client(account)
+    book = client.open_by_url(sheet["url"]) if sheet.get("url") else client.open_by_key(sheet["id"])
     if not name:
-        return book.sheet1
+        found = book.sheet1
+    else:
+        try:
+            found = book.worksheet(name)
+        except WorksheetNotFound:
+            # Only an absent tab is worth creating. Catching everything here
+            # meant a 503 on the lookup was answered by adding a second tab of
+            # the same name — a transient failure turning into a split ledger.
+            found = book.add_worksheet(title=name, rows=200, cols=20)
+    _SHEETS[key] = found
+    return found
+
+
+def ensure_header(worksheet, columns: list[str]) -> list[str] | None:
+    """Make sure a tab has its header row, at most once per tab per process.
+
+    **The single copy of a check that was written out eight times**, once per
+    module with a tab of its own — and every one of them a round trip to Google
+    on every write. The header cannot un-write itself, so once it is known to be
+    there the question is not worth asking again.
+
+    Returns the header row as it was found: `[]` when the tab was blank and one
+    has just been written, the existing cells when there was one, and **None**
+    when the answer was already known and nothing was read. `interest` has a
+    migration to run against an existing header and needs to tell those apart.
+    """
+    stamp = _tab_identity(worksheet)
+    if stamp is not None and stamp in _HEADERS:
+        return None
     try:
-        return book.worksheet(name)
-    except WorksheetNotFound:
-        # Only an absent tab is worth creating. Catching everything here meant
-        # a 503 on the lookup was answered by adding a second tab of the same
-        # name — a transient failure turning into a split ledger.
-        return book.add_worksheet(title=name, rows=200, cols=20)
+        first = list(worksheet.row_values(1))
+    except Exception:  # noqa: BLE001 — a brand new tab has no rows at all
+        first = []
+    if not any(str(v).strip() for v in first):
+        # Keyword arguments, not positional: gspread 6 reordered this to
+        # update(values, range_name), so update("A1", [COLUMNS]) writes the
+        # *string* "A1" as the values and passes a list as the range.
+        write_cells(worksheet, [columns], "A1")
+        first = []
+    if stamp is not None:
+        _HEADERS.add(stamp)
+    return first
 
 
 def records(sheet, columns: list[str]) -> list[dict]:
@@ -199,14 +343,26 @@ def records(sheet, columns: list[str]) -> list[dict]:
     position instead, because a header is only a label — the row is positional,
     and getting the data out beats showing somebody an empty page.
     """
+    identity = _tab_identity(sheet)
+    key = None if identity is None else (*identity, tuple(columns))
+    held = _ROWS.get(key) if key is not None else None
+    if held is not None and (time.time() - held[0]) < READ_SECONDS:
+        # Copied out, not handed out: callers build objects from these dicts and
+        # a shared mutable row would be a bug that only shows up on the second
+        # page view.
+        return [dict(row) for row in held[1]]
+
     try:
-        return sheet.get_all_records(expected_headers=list(columns))
+        rows = sheet.get_all_records(expected_headers=list(columns))
     except Exception:  # noqa: BLE001 — fall back rather than fail the read
         values = sheet.get_all_values()
-        return [
+        rows = [
             dict(zip(columns, list(row) + [""] * (len(columns) - len(row))))
             for row in values[1:]
         ]
+    if key is not None:
+        _ROWS[key] = (time.time(), [dict(row) for row in rows])
+    return rows
 
 
 def load(secrets: dict | None = None) -> LoadResult:
@@ -308,6 +464,34 @@ def append_rows(worksheet, rows: list[list], value_input_option: str = "USER_ENT
         value_input_option=value_input_option,
         insert_data_option=INSERT_ROWS,
     )
+    # Belt and braces with the HTTP door: this catches a write even when the
+    # worksheet underneath is not talking to Google at all.
+    forget_rows()
+
+
+def write_cells(worksheet, values: list[list], range_name: str,
+                value_input_option: str | None = None) -> None:
+    """Write a block of cells, and drop the cached reads.
+
+    **The one door every overwrite goes through**, next to `append_rows` and
+    `delete_row`, and for the same reason those exist: the cached tab contents
+    are wrong the instant anything changes, and a call site that has to
+    remember to say so is a call site that will not. Keyword arguments, always
+    — gspread 6 reordered `update` to (values, range_name), so a positional
+    call writes the range *as the values*.
+    """
+    if value_input_option is None:
+        worksheet.update(values=values, range_name=range_name)
+    else:
+        worksheet.update(values=values, range_name=range_name,
+                         value_input_option=value_input_option)
+    forget_rows()
+
+
+def delete_row(worksheet, number: int) -> None:
+    """Remove one row, and drop the cached reads. The other write door."""
+    worksheet.delete_rows(number)
+    forget_rows()
 
 
 def append(entry: Entry, secrets: dict | None = None) -> None:
@@ -351,7 +535,7 @@ def delete(entry: Entry, secrets: dict | None = None) -> None:
     from ledger import archive
 
     archive.record(archive.ENTRY, entry, secrets)
-    worksheet.delete_rows(entry.row)
+    delete_row(worksheet, entry.row)
     _announce("Ledger entry", "deleted", before=entry, secrets=secrets)
 
 
@@ -406,10 +590,8 @@ def update(original: Entry, edited: Entry, secrets: dict | None = None) -> None:
         )
     row = edited.to_row()
     last = _column_letter(len(row))
-    worksheet.update(
-        values=[row], range_name=f"A{original.row}:{last}{original.row}",
-        value_input_option="USER_ENTERED",
-    )
+    write_cells(worksheet, [row], f"A{original.row}:{last}{original.row}",
+                "USER_ENTERED")
     _announce("Ledger entry", "edited", before=original, after=edited, secrets=secrets)
 
 
@@ -536,15 +718,4 @@ def upload_attachment(
 
 def _ensure_header(worksheet) -> None:
     """Write the header row if the sheet is empty, so a blank sheet just works."""
-    try:
-        first = worksheet.row_values(1)
-    except Exception:
-        first = []
-    if not any(str(v).strip() for v in first):
-        # Keyword arguments, not positional. gspread 6 reordered this to
-        # update(values, range_name), so update("A1", [COLUMNS]) writes the
-        # *string* "A1" as the values and passes a list as the range. Every
-        # other tab's header write already spells it out; this one did not, and
-        # only fires on a brand-new sheet, which is the one path a first-time
-        # user is guaranteed to take.
-        worksheet.update(values=[COLUMNS], range_name="A1")
+    ensure_header(worksheet, COLUMNS)

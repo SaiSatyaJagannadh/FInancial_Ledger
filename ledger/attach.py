@@ -166,12 +166,7 @@ def _sheet(secrets: dict):
     from ledger import store
 
     sheet = store._open_worksheet(secrets, WORKSHEET)
-    try:
-        first = sheet.row_values(1)
-    except Exception:  # noqa: BLE001
-        first = []
-    if not any(str(v).strip() for v in first):
-        sheet.update(values=[COLUMNS], range_name="A1")
+    store.ensure_header(sheet, COLUMNS)
     return sheet
 
 

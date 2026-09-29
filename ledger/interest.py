@@ -543,19 +543,17 @@ def _sheet(secrets: dict):
     if not store.is_configured(secrets):
         raise RuntimeError("Demo mode: there is no sheet to write to.")
     sheet = store._open_worksheet(secrets, WORKSHEET)
-    try:
-        first = [str(v).strip() for v in sheet.row_values(1)]
-    except Exception:  # noqa: BLE001 — a brand new tab has no rows at all
-        first = []
-
-    if not any(first):
-        sheet.update(values=[COLUMNS], range_name="A1")
-        return sheet
-
-    named = [v for v in first if v]
-    if named != COLUMNS:
-        last = store._column_letter(len(COLUMNS))
-        sheet.update(values=[COLUMNS], range_name=f"A1:{last}1")
+    # `ensure_header` writes the header on a blank tab and hands back what it
+    # found on an existing one — or None when it already knew and looked at
+    # nothing, which is every call after the first in this process. The
+    # widening below is a migration for a tab written by an older version, so
+    # it only has anything to do when there was a header there to read.
+    first = store.ensure_header(sheet, COLUMNS)
+    if first:
+        named = [str(v).strip() for v in first if str(v).strip()]
+        if named != COLUMNS:
+            last = store._column_letter(len(COLUMNS))
+            store.write_cells(sheet, [COLUMNS], f"A1:{last}1")
     return sheet
 
 
@@ -614,7 +612,7 @@ def remove(charge: Charge, secrets: dict | None = None) -> None:
     from ledger import archive
 
     archive.record(archive.INTEREST, charge, secrets)   # before, for the same reason
-    sheet.delete_rows(charge.row)
+    store.delete_row(sheet, charge.row)
     _announce("Interest charge", "deleted", before=charge, secrets=secrets)
 
 
@@ -632,10 +630,8 @@ def replace_row(original: Charge, edited: Charge, secrets: dict | None = None) -
         )
     row = edited.to_row()
     last = store._column_letter(len(row))
-    sheet.update(
-        values=[row], range_name=f"A{original.row}:{last}{original.row}",
-        value_input_option="USER_ENTERED",
-    )
+    store.write_cells(sheet, [row], f"A{original.row}:{last}{original.row}",
+                      "USER_ENTERED")
     _announce("Interest charge", "edited", before=original, after=edited, secrets=secrets)
 
 

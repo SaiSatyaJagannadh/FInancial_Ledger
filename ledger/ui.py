@@ -56,6 +56,13 @@ def clear_cache() -> None:
     _cached_load.clear()
 
 
+# Any write to the workbook clears this too, so the row somebody just saved is
+# on the screen they land on instead of up to a minute later. Registered rather
+# than imported: `store` must not depend on the views layer.
+if clear_cache not in store.ON_WRITE:
+    store.ON_WRITE.append(clear_cache)
+
+
 #: Names people actually paste. Streamlit secrets are hand-edited TOML, so the
 #: key arrives however the person typed it.
 _KEY_NAMES = ("NVIDIA_API_KEY", "nvidia_api_key", "NVIDIA_KEY", "nvapi_key")

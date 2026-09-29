@@ -287,9 +287,8 @@ def set_password(email: str, password: str, secrets: dict | None = None) -> Acco
         )
 
     column = store._column_letter(COLUMNS.index("password_hash") + 1)
-    sheet.update(values=[[fresh]],
-                 range_name=f"{column}{account.row}:{column}{account.row}",
-                 value_input_option="RAW")
+    store.write_cells(
+        sheet, [[fresh]], f"{column}{account.row}:{column}{account.row}", "RAW")
     changed_to = Account(email=account.email, name=account.name,
                          password_hash=fresh, joined=account.joined,
                          row=account.row)
@@ -354,12 +353,7 @@ def _sheet(secrets: dict):
     from ledger import store
 
     sheet = store._open_worksheet(secrets, WORKSHEET)
-    try:
-        first = sheet.row_values(1)
-    except Exception:  # noqa: BLE001
-        first = []
-    if not any(str(v).strip() for v in first):
-        sheet.update(values=[COLUMNS], range_name="A1")
+    store.ensure_header(sheet, COLUMNS)
     return sheet
 
 
