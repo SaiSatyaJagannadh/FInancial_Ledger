@@ -20,13 +20,91 @@ from ledger import attach, clearance
 from ledger.models import BY_HAND, EntryError
 from ledger.money import Currency, format_money, spoken, to_minor
 from ledger.ui import (
-    attachment_button, attachment_is_stored, demo_banner, esc, load_ledger,
-    safe_href, styles,
+    attachment_button, attachment_field, attachment_is_stored, demo_banner, esc,
+    load_ledger, safe_href, styles,
 )
 
 NEW = "➕ New…"
 
 styles()
+
+
+@st.dialog("Edit this record")
+def edit_dialog(c: clearance.Clearance) -> None:
+    """Change any field of an existing record, then write it back to its row.
+
+    An edit, not a second record: `replace_row` re-reads the row and confirms
+    it still holds this record before touching it. If the money moved twice,
+    that is two records — save this one and add the other.
+    """
+    who_col, under_col = st.columns(2)
+    payer_now = who_col.text_input("Who gave it", value=c.payer, key="cl_e_payer")
+    under_now = under_col.text_input(
+        "Given under", value=c.under, key="cl_e_under",
+        help="Whose old debt it clears. Changing this refiles the record.",
+    )
+
+    when_col, amount_col, currency_col = st.columns([1.3, 1.2, 1.5])
+    when_now = when_col.date_input("Date", value=c.date, format="DD/MM/YYYY",
+                                   key="cl_e_date")
+    amount_now = amount_col.text_input(
+        f"Amount ({c.currency.symbol})", value=f"{c.amount_minor / 100:.2f}",
+        key="cl_e_amount",
+    )
+    currency_now = currency_col.radio(
+        "Currency", list(Currency), index=list(Currency).index(c.currency),
+        format_func=lambda x: f"{x.flag}  {x.label}", horizontal=True,
+        key="cl_e_currency",
+    )
+    note_now = st.text_input("Note", value=c.note, key="cl_e_note")
+
+    # The same attachment row the ledger's edit dialog uses: named rather than
+    # previewed, because fetching the file reruns the app and a rerun inside a
+    # dialog dismisses it, taking every field just typed with it.
+    kept, upload = attachment_field(c, key="cl_e")
+
+    edited = None
+    try:
+        edited = replace(
+            c, payer=payer_now.strip(), under=under_now.strip(), date=when_now,
+            amount_minor=to_minor(amount_now), currency=currency_now,
+            note=note_now.strip(), attachment=kept, source=BY_HAND,
+        )
+    except (ValueError, EntryError) as exc:
+        st.error(str(exc))
+
+    if edited is not None and edited.under != c.under:
+        st.info(f"This will move the record from **{c.under}** to **{edited.under}**.")
+
+    stored = f"cl_stored_{c.row}"
+    save, cancel = st.columns(2)
+    if save.button("Save changes", type="primary", width="stretch",
+                   disabled=edited is None or edited == c):
+        try:
+            if upload is not None:
+                # Remembered across presses: `replace_row` refusing a shifted
+                # row is a thing that happens, and pressing Save again would
+                # otherwise store a second copy of the photo and leave the
+                # first with nothing pointing at it.
+                if not st.session_state.get(stored):
+                    with st.spinner(f"Storing {upload.name}…"):
+                        st.session_state[stored] = attach.put(
+                            upload.name, upload.getvalue(),
+                            upload.type or "application/octet-stream",
+                        )
+                edited = replace(edited, attachment=st.session_state[stored])
+            clearance.replace_row(c, edited)
+        except Exception as exc:  # noqa: BLE001 — show whatever the sheet said
+            st.error(f"Could not save: {exc}")
+        else:
+            st.session_state.pop(stored, None)
+            st.session_state["cl_edited"] = (
+                f"{edited.payer} · {format_money(edited.amount_minor, edited.currency)}"
+                f" · under {edited.under}"
+            )
+            st.rerun()
+    if cancel.button("Cancel", width="stretch"):
+        st.rerun()
 
 result = load_ledger()
 demo_banner(result)
@@ -58,6 +136,10 @@ def picker(label: str, key: str, hint: str) -> str:
         placeholder="Type the name", label_visibility="collapsed",
     )
 
+
+just = st.session_state.pop("cl_edited", None)
+if just:
+    st.success(f"Updated {just}.")
 
 st.subheader("Record one")
 
@@ -225,8 +307,9 @@ for bucket in groups:
     ):
         st.caption("From: " + ", ".join(bucket["payers"]))
         for c in of_group:
-            when_col, amount_col, payer_col, note_col, file_col, remove_col = (
-                st.columns([1.2, 1.2, 1.4, 2.1, 1.3, 1], vertical_alignment="center")
+            (when_col, amount_col, payer_col, note_col, file_col, edit_col,
+             remove_col) = st.columns(
+                [1.2, 1.2, 1.3, 1.9, 1.25, 1, 1], vertical_alignment="center",
             )
             when_col.markdown(
                 f'<div class="khata-cell">{c.date:%d %b %Y}</div>',
@@ -258,6 +341,10 @@ for bucket in groups:
                         '<div class="khata-cell khata-meta">📎 —</div>',
                         unsafe_allow_html=True,
                     )
+            with edit_col:
+                if c.row is not None and st.button("Edit", key=f"cl_edit_{c.row}",
+                                                   width="stretch"):
+                    edit_dialog(c)
             with remove_col:
                 # Two clicks, like everywhere else — and the row is archived
                 # to the Deleted page before it goes, so this is recoverable.

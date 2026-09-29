@@ -217,6 +217,50 @@ def test_the_amount_is_compared_as_a_number(monkeypatch):
     assert fake.deleted == [4]
 
 
+def test_edit_writes_over_the_original_row(monkeypatch):
+    fake = wire(monkeypatch, {4: ["2026-03-01", "RAVI", "VIHAR", "2500.00", "INR"]})
+    clearance.replace_row(make(), make(amount_minor=999_00, under="CHAITU", row=99))
+    range_name, values = fake.writes[-1]
+    # The row it came from, not the row the edited copy claims to be on.
+    assert range_name.startswith("A4:"), range_name
+    assert values[0][2] == "CHAITU" and values[0][3] == "999.00"
+
+
+def test_edit_refuses_when_the_row_now_holds_somebody_else(monkeypatch):
+    fake = wire(monkeypatch, {4: ["2026-03-01", "AMMA", "CHAITU", "100.00", "INR"]})
+    with pytest.raises(RuntimeError, match="no longer matches"):
+        clearance.replace_row(make(), make(note="corrected"))
+    assert not [w for w in fake.writes if w[0] and w[0].startswith("A4:")]
+
+
+def test_an_edit_covers_every_column_it_writes(monkeypatch):
+    """A short range would leave the tail of the old row in place — an edit
+    that blanks a note has to actually blank it."""
+    fake = wire(monkeypatch, {4: ["2026-03-01", "RAVI", "VIHAR", "2500.00", "INR"]})
+    clearance.replace_row(make(note="old", attachment="sheet:ab12"),
+                          make(note="", attachment=""))
+    range_name, values = fake.writes[-1]
+    assert range_name == f"A4:{store._column_letter(len(clearance.COLUMNS))}4"
+    assert len(values[0]) == len(clearance.COLUMNS)
+    assert values[0][-1] == "" and values[0][5] == ""
+
+
+def test_an_edit_is_not_archived(monkeypatch):
+    """Deliberate: an edit keeps the row and changes what it says, so there is
+    no moment where the record is absent — which is what the archive is for."""
+    from ledger import archive
+
+    fake = wire(monkeypatch, {4: ["2026-03-01", "RAVI", "VIHAR", "2500.00", "INR"]})
+    clearance.replace_row(make(), make(note="corrected"))
+    assert archive.WORKSHEET not in fake.book or not fake.book[archive.WORKSHEET].appended
+
+
+def test_a_row_with_no_number_cannot_be_edited(monkeypatch):
+    wire(monkeypatch, {})
+    with pytest.raises(RuntimeError, match="no sheet row"):
+        clearance.replace_row(make(row=None), make(row=None, note="x"))
+
+
 def test_a_row_with_no_number_cannot_be_deleted(monkeypatch):
     wire(monkeypatch, {})
     with pytest.raises(RuntimeError, match="no sheet row"):
@@ -519,3 +563,11 @@ def test_the_form_offers_a_photo_and_a_link(monkeypatch):
     assert app.text_input(key="cl_link") is not None
     labels = " ".join(str(w.label) for w in app.get("file_uploader"))
     assert "Photo or receipt" in labels, labels
+
+
+def test_every_row_offers_an_edit(monkeypatch):
+    """The dialog itself cannot be opened from a test — `st.dialog` needs a
+    real click — so what is checked here is that the control is on every row."""
+    app = on_screen(monkeypatch)
+    assert app.button(key="cl_edit_2") is not None
+    assert sum(1 for b in app.button if b.label == "Edit") == 4  # the INR rows

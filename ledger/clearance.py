@@ -224,6 +224,39 @@ def _matches(cells: list[str], record: Clearance) -> bool:
         return False
 
 
+def replace_row(original: Clearance, edited: Clearance,
+                secrets: dict | None = None) -> None:
+    """Write `edited` over the row `original` came from.
+
+    The row is re-read and confirmed first, exactly as a delete is: rows shift
+    when anything above them goes, and a stale number would otherwise write one
+    person's correction over another person's record.
+
+    Not archived, unlike a delete. An edit keeps a row and changes what it says;
+    there is no moment where the record is absent from the sheet, which is the
+    thing the archive exists to survive. If you meant to keep the old figure as
+    well, that is a second record, not an edit of this one.
+    """
+    from ledger import store
+
+    secrets = store._secrets() if secrets is None else secrets
+    if original.row is None:
+        raise RuntimeError("This record has no sheet row, so it cannot be edited.")
+    sheet = _sheet(secrets)
+    if not _matches(sheet.row_values(original.row), original):
+        raise RuntimeError(
+            f"Row {original.row} no longer matches — the sheet changed since it "
+            "was loaded. Reload and try again."
+        )
+    row = edited.to_row()
+    last = store._column_letter(len(row))
+    sheet.update(
+        values=[row], range_name=f"A{original.row}:{last}{original.row}",
+        value_input_option="USER_ENTERED",
+    )
+    _announce("edited", before=original, after=edited, secrets=secrets)
+
+
 def remove(record: Clearance, secrets: dict | None = None) -> None:
     from ledger import store
 

@@ -115,7 +115,7 @@ amounts, and there is no way to read that screen which is true.
 | **Assistant** | Say what happened, or upload a statement, and approve what it drafts |
 | **Interest** | What each person owes in interest, kept out of the ledger totals. Copy a whole month forward rather than retyping it |
 | **Spending** / **Add spending** | General expenses, deliberately kept out of the lending totals |
-| **Debt clearance** | Money handed over to clear somebody's old debt, filed under the name it was given under, with a photo of the receipt if you have one. Filter by either name, year or free text. A record only — it is added to no total anywhere |
+| **Debt clearance** | Money handed over to clear somebody's old debt, filed under the name it was given under, with a photo of the receipt if you have one. Filter by either name, year or free text; edit or delete any row, and a deleted one goes to **Deleted** like everything else. A record only — it is added to no total anywhere |
 | **Deleted** | Every removed row — ledger, interest or debt clearance — with what it said and when it went, and a way to put it back |
 | **Download** | Excel, PDF, or a summary to send by WhatsApp or email |
 

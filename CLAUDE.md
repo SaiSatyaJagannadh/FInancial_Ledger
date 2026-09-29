@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~794)
+.venv/bin/python -m pytest -q                     # all tests (~800)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -234,8 +234,17 @@ if anything but its own page starts reading it. A row carries two names —
 `by_under()` files them under the second, sorted by name rather than by size,
 because the question is "what is filed under Vihar" and not "who is the
 largest". The two may be the same person; clearing your own old debt is a
-legitimate thing to write down, so it is not refused. Edits are delete and
-retype: a five-field record does not need a second write path.
+legitimate thing to write down, so it is not refused.
+
+**An edit is not archived, and a deletion is** (`clearance.replace_row` against
+`clearance.remove`). An edit keeps the row and changes what it says, so there
+is no moment where the record is absent from the sheet — which is the thing the
+archive exists to survive. Both re-read the row and confirm it still holds that
+record first. `replace_row` writes the **whole** width of `COLUMNS`, not the
+cells that changed: a short range leaves the tail of the old row in place, so
+clearing a note would not clear it. Unlike the ledger's dialog there is no "add
+as a new entry" beside Save — a clearance has no second half to reconcile, so
+money that moved twice is two records rather than an edit of one.
 
 **A deletion here is archived first, exactly like the ledger's.** A clearance
 is often the only record that the money moved at all — there is no second row
