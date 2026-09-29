@@ -20,6 +20,12 @@ from ledger import auth  # noqa: E402 — must follow set_page_config
 auth.gate()
 auth.sidebar_identity()
 
+# Drawn by the router so it is on every page and cannot be forgotten by one —
+# and after the gate, so it never appears over the sign-in screen.
+from ledger.ui import home_button  # noqa: E402 — must follow set_page_config
+
+home_button()
+
 st.navigation([
     st.Page("views/dashboard.py", title="Ledger", icon=":material/menu_book:", default=True),
     st.Page("views/add_entry.py", title="Add entry", icon=":material/add:"),

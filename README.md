@@ -130,6 +130,7 @@ each credential.
 |---|---|
 | `[notify]` | An email whenever anything is added, edited or deleted, naming which fields changed and what they changed from and to. Needs a Gmail App Password |
 | `[auth]` | Google sign-in. Stores no password anywhere; the app only checks the address against your `allowed` list |
+| `[accounts] cookie_secret` | Optional. Signs the cookie that keeps you signed in across a refresh. Without it one is derived from the service-account key, so this only needs setting if you want to invalidate every session at will — changing it signs everybody out |
 | `[accounts] enabled = true` | Name/password accounts in a `users` tab instead, with sign-up and a reset. Weaker than `[auth]` — the hashes live in the workbook, so anyone who can *edit* the sheet is effectively an administrator |
 | `NVIDIA_API_KEY` | The Assistant page |
 

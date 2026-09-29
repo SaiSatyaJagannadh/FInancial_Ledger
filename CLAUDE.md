@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~800)
+.venv/bin/python -m pytest -q                     # all tests (~832)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -325,7 +325,15 @@ matching rows: reading the whole tab would pull every stored file to serve one.
 ## Configuration
 
 Secrets are Streamlit's encrypted store (`.streamlit/secrets.toml` locally,
-gitignored). `ledger/ui.py::api_key()` searches **every section** for the NVIDIA
+gitignored). `ledger/ui.py::home_button()` is drawn by the router, so it is on every page
+and no page can forget it. It sits **below** Streamlit's own header rather than
+in it: that header is opaque at `z-index: 999990`, so the first version was on
+the page, correctly positioned, and invisible. Clicking it drops the cached
+sheet read and `switch_page`s to the Ledger — fresh figures without reloading
+the *page*, which is the distinction that matters, because a browser refresh is
+the thing that used to end the session.
+
+`ledger/ui.py::api_key()` searches **every section** for the NVIDIA
 key, because a key pasted at the bottom of the box lands inside the last
 `[section]` and a top-level lookup misses it.
 
@@ -380,6 +388,34 @@ register knows it) but is the difference between a locked-out household and a
 sheet edit. With neither, the page says to delete the row from the `users` tab.
 `accounts.set_password` re-reads the row and confirms it still holds that
 address before writing, the same guard the ledger uses.
+
+**A refresh no longer signs anybody out.** A Streamlit session lives inside one
+websocket connection, so reloading the page started an empty one and the gate
+concluded nobody was signed in — every single time. A signed token now goes
+into a `ledger_session` cookie and `auth._restore()` puts it back before the
+gate decides. Three things about it are load-bearing:
+
+- **No secret, no remembering.** `_remember_key()` prefers
+  `[accounts].cookie_secret` and otherwise derives one from the service-account
+  private key through HMAC with a purpose string — already high-entropy,
+  already in the file, never shown to anyone using the app, and not reversible
+  into the key Google trusts. With neither, nothing is issued and nothing is
+  accepted: an unsigned token is one anybody can forge into "I am you".
+- **Streamlit cannot set a cookie**, so the token rides out on a one-line
+  script in a `components.html` iframe — `srcdoc`, sandboxed with
+  `allow-same-origin`, so it shares the app's origin. It is rendered at
+  `height=1`: a component with **no size is never mounted**, so the script
+  never runs and the cookie silently never appears. It is also written on the
+  run *after* the sign-in, because `st.rerun()` throws away everything the
+  current run has drawn — the script included.
+- **A sign-out must win over the cookie.** `st.context.cookies` holds what the
+  page was *loaded* with, so the token is still readable for the rest of that
+  run; `_sign_out` sets the `_RESTORED` latch so `_restore` cannot put it back
+  before the browser has been told to drop it.
+
+Its ceiling: the cookie is not `HttpOnly` — it cannot be, since JavaScript is
+what sets it — so anything that achieves script execution on the page can read
+it. That is why every interpolation still goes through `ui.esc()`.
 
 **Being signed in is a fact about the session, never a question for the sheet.**
 `auth.signed_in_email()` reads session state and nothing else. Re-reading the

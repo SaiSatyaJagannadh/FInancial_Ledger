@@ -17,6 +17,12 @@ puts the address on the change email, so "who edited this" has an answer.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
+
 import streamlit as st
 
 from ledger.ui import INK, PAPER, RULE, SHADE   # the ledger's own colours, so
@@ -104,10 +110,10 @@ def current_user() -> str:
         return ""
 
 
-#: Where a password sign-in is remembered. Session state only: it lasts as long
-#: as the browser tab and is gone on a refresh. A cookie would outlive that, but
-#: signing it needs a secret and getting that wrong is worse than signing in
-#: again.
+#: Where a password sign-in is remembered *within* a run. Session state is per
+#: websocket connection, so a refresh starts an empty one — which is why the
+#: cookie below exists. Everything that asks "is somebody signed in" still asks
+#: this key and nothing else; the cookie only ever puts a value back into it.
 SESSION = "account_email"
 
 #: The display name, kept beside it. Written once at sign-in so that showing
@@ -117,6 +123,169 @@ SESSION_NAME = "account_name"
 #: Set by `_sign_out` so the next run says "signed out" rather than dropping
 #: somebody straight back onto a form they did not ask for.
 SIGNED_OUT = "signed_out"
+
+
+#: The name of the cookie a remembered sign-in lives in.
+COOKIE = "ledger_session"
+
+#: How long it lasts. Long enough that a refresh, a closed tab, or coming back
+#: after lunch is not a sign-in; short enough that a borrowed laptop does not
+#: stay signed in for ever.
+REMEMBER_DAYS = 14
+
+#: Set to a token by a successful sign-in, and written to the browser on the
+#: next run. A rerun discards whatever the current run had drawn, so the script
+#: that sets the cookie cannot be rendered in the same breath as the sign-in.
+_PENDING = "remember_pending"
+
+#: Set once a cookie has been read back into the session, so a sign-out later in
+#: the same run cannot be undone by the cookie that is still in `st.context`.
+_RESTORED = "remember_restored"
+
+
+def _remember_key(secrets: dict | None = None) -> bytes:
+    """The key the session token is signed with, or b"" when there is none.
+
+    Preference is an explicit `[accounts].cookie_secret`. Failing that it is
+    derived from the service-account private key, which is already a
+    high-entropy secret, is already in this file, and is never shown to anyone
+    using the app. It is run through HMAC with a purpose string rather than used
+    directly, so this use cannot be turned back into the key Google trusts.
+
+    **No secret, no remembering.** An unsigned token is one anybody can forge
+    into "I am you", which is far worse than signing in again after a refresh.
+    """
+    secrets = _secrets() if secrets is None else secrets
+    try:
+        configured_secret = str(dict(secrets.get("accounts") or {})
+                                .get("cookie_secret") or "").strip()
+    except Exception:  # noqa: BLE001 — a section we cannot even read
+        configured_secret = ""
+    if configured_secret:
+        return configured_secret.encode()
+    try:
+        private = str(dict(secrets.get("gcp_service_account") or {})
+                      .get("private_key") or "").strip()
+    except Exception:  # noqa: BLE001
+        private = ""
+    if not private:
+        return b""
+    return hmac.new(private.encode(), b"personal-ledger session cookie v1",
+                    hashlib.sha256).digest()
+
+
+def _b64(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _unb64(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def make_token(email: str, name: str, key: bytes, *, now: float | None = None,
+               days: int = REMEMBER_DAYS) -> str:
+    """A signed "this browser is <email>" note, good until it expires.
+
+    The payload is readable by anybody holding the cookie — it is their own
+    address and name, which they already know. What the signature buys is that
+    it cannot be *changed* into somebody else's.
+    """
+    if not key:
+        return ""
+    now = time.time() if now is None else now
+    body = _b64(json.dumps(
+        {"e": email, "n": name, "x": int(now + days * 86400)},
+        separators=(",", ":"),
+    ).encode())
+    return f"v1.{body}.{_b64(hmac.new(key, body.encode(), hashlib.sha256).digest())}"
+
+
+def read_token(token: str, key: bytes, *, now: float | None = None) -> tuple[str, str]:
+    """(email, name) from a token that is intact and unexpired, else ("", "").
+
+    Every failure — a wrong shape, a bad signature, an expired stamp, a payload
+    that is not the JSON it should be — is answered the same way: nobody. A
+    cookie is under the holder's control, so this is a parser for hostile input
+    and it never raises.
+    """
+    if not key or not token:
+        return "", ""
+    try:
+        version, body, signature = str(token).split(".")
+        if version != "v1":
+            return "", ""
+        want = hmac.new(key, body.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(_unb64(signature), want):
+            return "", ""
+        payload = json.loads(_unb64(body))
+        if float(payload["x"]) < (time.time() if now is None else now):
+            return "", ""
+        return str(payload.get("e") or ""), str(payload.get("n") or "")
+    except Exception:  # noqa: BLE001 — anything malformed is simply nobody
+        return "", ""
+
+
+def _cookie_script(value: str, seconds: int) -> str:
+    """The one line of JavaScript that sets or clears the cookie.
+
+    Streamlit has no API for writing one, but `components.html` renders a
+    `srcdoc` iframe sandboxed with `allow-same-origin`, so a script inside it
+    shares the app's origin and `document.cookie` lands on the app's domain.
+    `Secure` only over https — a Secure cookie is silently dropped on the plain
+    http of a local run, which would make this look broken everywhere but live.
+    """
+    try:
+        secure = "; Secure" if str(st.context.url or "").startswith("https") else ""
+    except Exception:  # noqa: BLE001 — no runtime, no url
+        secure = ""
+    return (
+        "<script>document.cookie="
+        f"{json.dumps(f'{COOKIE}={value}; Path=/; Max-Age={seconds}; SameSite=Lax{secure}')}"
+        ";</script>"
+    )
+
+
+def _write_cookie(value: str, seconds: int) -> None:
+    """Render the one-line script that carries the cookie to the browser.
+
+    `height=1`, not `height=0`: a component with no size is not mounted at all,
+    so the script never runs. That was silent — the cookie simply never
+    appeared, and the sign-in looked exactly as forgetful as before.
+    """
+    import streamlit.components.v1 as components
+
+    components.html(_cookie_script(value, seconds), height=1)
+
+
+def _restore() -> None:
+    """Put a remembered sign-in back into this session, once per session.
+
+    Runs *before* the gate decides, and only when nothing is signed in already.
+    A sign-out in this browser clears the cookie, but `st.context.cookies` holds
+    what the page was loaded with — so `_RESTORED` and `SIGNED_OUT` between them
+    stop a cookie that is already gone from signing somebody back in.
+    """
+    if st.session_state.get(SESSION) or st.session_state.get(_RESTORED):
+        return
+    if st.session_state.get(SIGNED_OUT):
+        return
+    st.session_state[_RESTORED] = True
+    try:
+        token = str(st.context.cookies.get(COOKIE) or "")
+    except Exception:  # noqa: BLE001 — no runtime, no cookies
+        return
+    email, name = read_token(token, _remember_key())
+    if email:
+        st.session_state[SESSION] = email
+        st.session_state[SESSION_NAME] = name or email
+
+
+def _flush_cookie() -> None:
+    """Write whatever the last run decided the browser should hold."""
+    pending = st.session_state.pop(_PENDING, None)
+    if pending is None:
+        return
+    _write_cookie(pending, REMEMBER_DAYS * 86400 if pending else 0)
 
 
 def signed_in_email() -> str:
@@ -272,8 +441,12 @@ def _signed_out_screen() -> None:
     button had worked — the same page they were just told to fill in, with their
     address gone from it. This is one screen, and it stays until they ask.
     """
+    # Clearing it here rather than in `_sign_out`: that runs as an on_click
+    # callback, before the page is drawn, and a script nobody renders sets no
+    # cookie. This screen is the one thing that is certain to be drawn after.
+    _write_cookie("", 0)
     _auth_chrome("You are signed out. Nothing from that session is left in "
-                 "this browser tab.")
+                 "this browser, on this device.")
     if st.button("Sign in again", type="primary", width="stretch"):
         st.session_state.pop(SIGNED_OUT, None)
         st.rerun()
@@ -290,7 +463,12 @@ def _password_gate() -> None:
     from ledger import accounts
     from ledger.models import EntryError
 
+    # A refresh starts a brand new session, so this is where a remembered
+    # sign-in comes back — before anything asks whether somebody is signed in.
+    _restore()
+
     if signed_in_email():
+        _flush_cookie()
         return
 
     if st.session_state.get(SIGNED_OUT):
@@ -347,6 +525,11 @@ def _password_gate() -> None:
                 # Kept beside it so the sidebar can say who is signed in
                 # without reading the users tab again on every rerun.
                 st.session_state[SESSION_NAME] = account.name or account.email
+                # Written to the browser on the next run — `st.rerun()` throws
+                # away whatever this one has drawn, the script included.
+                st.session_state[_PENDING] = make_token(
+                    account.email, account.name or account.email, _remember_key()
+                )
                 st.rerun()
 
     with sign_up:
@@ -573,13 +756,17 @@ def _sign_out() -> None:
     sitting in state, so signing out and back in showed somebody the previous
     person's address in the box.
     """
-    for key in [SESSION, SESSION_NAME, _RESET, "account_created",
+    for key in [SESSION, SESSION_NAME, _RESET, _PENDING, "account_created",
                 "account_created_email",
                 "login_email", "login_password", "signup_name", "signup_email",
                 "signup_password", "signup_confirm", "reset_email", "reset_code",
                 "reset_new", "reset_again"]:
         st.session_state.pop(key, None)
     st.session_state[SIGNED_OUT] = True
+    # `st.context.cookies` still holds the token this page was loaded with —
+    # the browser only forgets it once the screen below has drawn the script.
+    # Until then this latch is what stops `_restore` from undoing the sign-out.
+    st.session_state[_RESTORED] = True
 
 
 def sidebar_identity() -> None:

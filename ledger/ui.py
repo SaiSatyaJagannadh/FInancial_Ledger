@@ -220,6 +220,49 @@ def styles() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
 
+#: The home control sits top right, *below* Streamlit's own header rather than
+#: inside it. The header is opaque and sits at z-index 999990, so anything
+#: sharing that strip is simply painted over — the first version of this was
+#: on the page, correctly positioned, and invisible. Below it there is nothing
+#: to fight: the band above the title is empty on every page.
+#:
+#: Fixed rather than in the flow, because the router draws it once and every
+#: page then scrolls underneath it. Opaque, for the same reason.
+_HOME_CSS = f"""
+<style>
+  .st-key-khata-home {{
+      position: fixed; top: 4.1rem; right: 1.1rem; z-index: 999991; width: auto;
+  }}
+  .st-key-khata-home .stButton button {{
+      padding: .2rem .7rem; border-radius: 9px; font-weight: 600;
+      font-size: .82rem; min-height: 0; line-height: 1.7;
+      background: {PAPER}; color: {INK}; border: 1px solid {RULE};
+      box-shadow: 0 1px 2px rgba(22, 32, 46, .06);
+  }}
+  .st-key-khata-home .stButton button:hover {{ border-color: {INK}; color: {INK}; }}
+  @media (max-width: 640px) {{
+      .st-key-khata-home {{ top: 3.6rem; right: .6rem; }}
+  }}
+</style>
+"""
+
+
+def home_button(target: str = "views/dashboard.py") -> None:
+    """A way back to the Ledger from anywhere, top right, on every page.
+
+    It reloads the figures without reloading the *page*: `clear_cache()` drops
+    the cached sheet read and `switch_page` reruns the app. That distinction is
+    the point — a browser refresh throws away the Streamlit session, and going
+    back for fresh numbers should never be the same gesture as signing out.
+    """
+    st.markdown(_HOME_CSS, unsafe_allow_html=True)
+    with st.container(key="khata-home"):
+        if st.button("⌂  Home", key="khata_home_button",
+                     help="Back to the Ledger with fresh figures. Does not sign you out."):
+            clear_cache()
+            st.switch_page(target)
+
+
 #: A short mark, not a sentence: the line is already dense.
 _SOURCE_MARK = {"chat": "via chat", "image": "from image"}
 
