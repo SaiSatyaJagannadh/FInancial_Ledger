@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~725)
+.venv/bin/python -m pytest -q                     # all tests (~782)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -13,8 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Several `ledger/` modules carry a `demo()` self-check runnable as
 `python -m ledger.<module>`: `assistant`, `attach`, `docs`, `export`, `invest`,
-`accounts`, `archive`, `auth`, `facts`, `interest`, `notify`, `people`,
-`settle`, `spend`. These assert the behaviour that is awkward to unit-test
+`accounts`, `archive`, `auth`, `clearance`, `facts`, `interest`, `notify`,
+`people`, `settle`, `spend`. These assert the behaviour that is awkward to unit-test
 (file round-trips, compounding maths, JSON parsing) and run in CI-adjacent
 fashion — keep them passing.
 
@@ -49,7 +49,7 @@ Copy the real signature, including the arguments you are not using.
 
 ## Architecture
 
-**One Google Sheets workbook is the entire database.** Seven tabs, seven
+**One Google Sheets workbook is the entire database.** Eight tabs, eight
 modules, no SQL:
 
 | Tab | Module | Holds |
@@ -58,6 +58,7 @@ modules, no SQL:
 | `transactions` | `ledger/spend.py` | General spending, deliberately never summed into the ledger |
 | `attachments` | `ledger/attach.py` | Uploaded files, base64 across cells |
 | `interest` | `ledger/interest.py` | Monthly interest charges, **never** summed into the ledger |
+| `clearances` | `ledger/clearance.py` | Old debts cleared between people — a record, summed into **nothing** |
 | `people` | `ledger/people.py` | Who rolls up under whom |
 | `deleted` | `ledger/archive.py` | Every removed row, and how to put it back |
 | `users` | `ledger/accounts.py` | Name/password accounts, when `[accounts]` is on |
@@ -217,6 +218,24 @@ question of when, not if — and `would_cycle()` refuses one before it is saved.
 Vihar is recorded as having returned it and Chaitu as having taken it. A
 single "given" row under Chaitu would say more money left the house than
 actually did.
+
+### Cleared old debts (`ledger/clearance.py`)
+
+**A cleared old debt is a record, not a transaction.** `ledger/clearance.py`
+holds money handed over to clear somebody's old debt — one that predates the
+app, or was settled in cash, or was never a ledger row. There is nothing to net
+it against, so writing it into `entries` would invent a loan that was never
+made, and adding it to any total would move a figure that describes other rows.
+It is therefore summed into **nothing**: not the ledger, not spending, not
+interest, and `compute.py` does not import it.
+`tests/test_clearance.py::test_nothing_else_in_the_app_sums_these_rows` fails
+if anything but its own page starts reading it. A row carries two names —
+`payer` (who handed it over) and `under` (whose old debt it clears) — and
+`by_under()` files them under the second, sorted by name rather than by size,
+because the question is "what is filed under Vihar" and not "who is the
+largest". The two may be the same person; clearing your own old debt is a
+legitimate thing to write down, so it is not refused. Edits are delete and
+retype: a five-field record does not need a second write path.
 
 ### Answering questions (`ledger/facts.py`)
 

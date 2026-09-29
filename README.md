@@ -115,6 +115,7 @@ amounts, and there is no way to read that screen which is true.
 | **Assistant** | Say what happened, or upload a statement, and approve what it drafts |
 | **Interest** | What each person owes in interest, kept out of the ledger totals. Copy a whole month forward rather than retyping it |
 | **Spending** / **Add spending** | General expenses, deliberately kept out of the lending totals |
+| **Debt clearance** | Money handed over to clear somebody's old debt, filed under the name it was given under. A record only — it is added to no total anywhere |
 | **Deleted** | Every removed row, with what it said and when it went — and a way to put it back |
 | **Download** | Excel, PDF, or a summary to send by WhatsApp or email |
 
@@ -154,6 +155,7 @@ ledger/
   docs.py         an upload turned into text or a right-sized image
   invest.py       compounding — the "Invested instead" page it feeds is off the router
   interest.py     the interest tab, never summed into the ledger
+  clearance.py    the clearances tab: old debts cleared, summed into nothing
   people.py       the people tab: who rolls up under whom
   facts.py        answers the arithmetic questions in code, before the model
   archive.py      the deleted tab: what was removed, and restoring it
@@ -172,12 +174,13 @@ same rule.
 
 ## Where things are stored
 
-One Google Sheets workbook is the whole database — three tabs, no SQL:
+One Google Sheets workbook is the whole database — no SQL:
 
 | Tab | Holds |
 |---|---|
 | `entries` | The lending ledger |
 | `transactions` | General spending, never summed into the ledger |
+| `clearances` | Old debts cleared between people, summed into nothing |
 | `attachments` | Uploaded files, base64 across cells |
 
 Attachments live in the sheet rather than Drive because a service account has
