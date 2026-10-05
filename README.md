@@ -1,4 +1,22 @@
-# Personal Ledger
+<div align="center">
+
+# 💸 Personal Ledger — Who Owes Me What
+
+### Track money lent to and repaid by family & friends — rupees and dollars kept separate, Google Sheets as the store, an AI assistant to log entries.
+
+[![Live Demo](https://img.shields.io/badge/▶_Live_Demo-Try_it_now-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://family-financialledger.streamlit.app/)
+
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)
+![Google Sheets](https://img.shields.io/badge/Google_Sheets-34A853?style=flat-square&logo=googlesheets&logoColor=white)
+![Google OAuth](https://img.shields.io/badge/Google_OAuth-4285F4?style=flat-square&logo=google&logoColor=white)
+![pytest](https://img.shields.io/badge/pytest-0A9EDC?style=flat-square&logo=pytest&logoColor=white)
+
+**👉 [family-financialledger.streamlit.app](https://family-financialledger.streamlit.app/)**
+
+</div>
+
+---
 
 A ledger for money lent to and repaid by people you know — family, friends. It
 answers one question: **who owes me what.**
@@ -208,3 +226,11 @@ awkward to unit-test — file round-trips, compounding, JSON parsing:
 ```bash
 .venv/bin/python -m ledger.invest
 ```
+
+---
+
+<div align="center">
+
+**Built by [Sai Satya Jagannadh Doddipatla (DJ)](https://saisatyajagannadh.github.io/PersonalPortfolio/)** · ⭐ Star the repo if it helped
+
+</div>
