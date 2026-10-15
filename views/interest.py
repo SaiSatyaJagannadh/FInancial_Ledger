@@ -15,6 +15,7 @@ because the radio was set to it — never on its own.
 from __future__ import annotations
 
 from datetime import date
+from urllib.parse import quote
 
 import streamlit as st
 
@@ -652,8 +653,16 @@ for _row in _owing:
         f"{_row['person']} — {format_money(_row['remaining_minor'], currency)} "
         f"still due ({', '.join(c.month_label for c in _row['charges'])})"
     ):
-        st.caption("Copy this and send it — the icon at the top right copies it.")
-        st.code(interest.reminder(_row), language=None, wrap_lines=True)
+        _text = interest.reminder(_row)
+        # No phone numbers are kept, so these open the app with the message
+        # already written and you pick who it goes to — one tap, not retyping.
+        _wa, _sms = st.columns(2)
+        _wa.link_button("Send on WhatsApp", "https://wa.me/?text=" + quote(_text),
+                        width="stretch")
+        _sms.link_button("Send as SMS", "sms:?&body=" + quote(_text),
+                         width="stretch")
+        st.caption("Or copy it — the icon at the top right of the box.")
+        st.code(_text, language=None, wrap_lines=True)
 
 # ------------------------------------------------------------- by month
 st.divider()
