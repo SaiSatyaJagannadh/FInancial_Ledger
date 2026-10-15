@@ -639,6 +639,22 @@ for charge in shown:
                 st.rerun()
     st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
 
+# ------------------------------------------------------------- still to collect
+# Whoever has not handed over all of it for the months shown, with a message
+# ready to copy into WhatsApp or SMS — the app reminds you; you send it.
+st.divider()
+_owing = interest.still_due(shown, currency)
+st.subheader("Still to collect")
+if not _owing:
+    st.success("Everyone has given all of it for what is shown.")
+for _row in _owing:
+    with st.expander(
+        f"{_row['person']} — {format_money(_row['remaining_minor'], currency)} "
+        f"still due ({', '.join(c.month_label for c in _row['charges'])})"
+    ):
+        st.caption("Copy this and send it — the icon at the top right copies it.")
+        st.code(interest.reminder(_row), language=None, wrap_lines=True)
+
 # ------------------------------------------------------------- by month
 st.divider()
 st.subheader("Total by month")

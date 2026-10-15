@@ -525,6 +525,41 @@ def by_person(charges: list[Charge], currency: Currency) -> list[dict]:
     return rows
 
 
+def still_due(charges: list[Charge], currency: Currency) -> list[dict]:
+    """Who still has interest to hand over, most first — the reminder list.
+
+    One row per person, with the charges behind it oldest first, so a reminder
+    can name each month rather than one lump.
+    """
+    owing: dict[str, list[Charge]] = {}
+    for charge in sorted(charges, key=lambda c: c.date):
+        if charge.currency is currency and charge.remaining_minor > 0:
+            owing.setdefault(charge.person, []).append(charge)
+    rows = [
+        {"person": person, "charges": owed,
+         "remaining_minor": sum(c.remaining_minor for c in owed)}
+        for person, owed in owing.items()
+    ]
+    rows.sort(key=lambda r: (-r["remaining_minor"], r["person"]))
+    return rows
+
+
+def reminder(row: dict) -> str:
+    """A message to send, in words — the person reads it, not the app."""
+    lines = []
+    for c in row["charges"]:
+        line = f"- {c.month_label}: {format_money(c.remaining_minor, c.currency)}"
+        if c.partly_paid:
+            line += (f" (given so far {format_money(c.paid_minor, c.currency)}"
+                     f" of {c.money()})")
+        lines.append(line)
+    total = format_money(row["remaining_minor"], row["charges"][0].currency)
+    return (
+        f"Hi {row['person']}, a gentle reminder — {total} of interest is still "
+        "due:\n" + "\n".join(lines) + "\nPlease send it when you can. Thank you!"
+    )
+
+
 def by_month(charges: list[Charge], currency: Currency) -> list[dict]:
     """Interest per month, oldest first — the shape a chart wants."""
     buckets: dict[str, int] = {}
@@ -817,6 +852,17 @@ def demo() -> None:
         pass
     else:  # pragma: no cover
         raise AssertionError("paying more than the charge must be refused")
+
+    # The reminder list: only what is left, most first, every month named.
+    owe = still_due([vinay, half, Charge(date=sep, person="Vinay",
+                                         amount_minor=5_000_00)], Currency.INR)
+    assert [(r["person"], r["remaining_minor"]) for r in owe] == [
+        ("Vinay", 7_000_00), ("Chaitu", 1_000_00)]
+    text = reminder(owe[0])
+    assert "₹7,000.00" in text and "Aug 2026" in text and "Sep 2026" in text
+    assert "given so far ₹3,000.00 of ₹5,000.00" in text, text
+    assert still_due([Charge(date=aug, person="X", amount_minor=100,
+                             kind=Kind.given)], Currency.INR) == []
 
     print("ledger.interest: all checks passed")
 
