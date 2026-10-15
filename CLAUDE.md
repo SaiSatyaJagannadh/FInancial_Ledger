@@ -237,6 +237,16 @@ which starts as still-due. Anyone who already has a charge that month is
 skipped and named — `set_for_month` is an upsert, so copying over a corrected
 figure would silently undo the correction.
 
+**A part-payment is a `paid` figure on the charge, not a second row.**
+₹3,000 given of ₹5,000 is one August charge with `paid` = 3,000, shown as
+"₹2,000 still due"; `kind` is derived from it in `__post_init__` so the two
+cannot disagree. A row written before the column existed reads `paid` as all of
+it when it said "given" *or* had been handed on — the edit dialog once let
+"Still due" be saved beside "someone else took it", so Vihar's ledger entry
+went in while the charge it came from still read due. Handing on is now only
+offered once something has been given, and only what was given reaches the
+ledger; what is still owed stays interest.
+
 The one opt-in route from interest into the ledger goes through
 `interest.sync_ledger_entry()`, and the row it may correct is identified by the
 **trail it writes into the note** (`trail_note`), never by shape. Matching on

@@ -74,6 +74,11 @@ if not mine:
 everyone = sorted({e.person for e in mine})
 owed = {s.person: s.net_minor for s in by_person(mine, currency)}
 TO_LEDGER = "Someone else took it → add to the ledger"
+PARTLY = "partly"
+STATUS_LABELS = {
+    interest.Kind.due.value: "Still due", PARTLY: "Partly given",
+    interest.Kind.given.value: "Given to me", TO_LEDGER: TO_LEDGER,
+}
 
 
 def ledger_options(person: str) -> list[str]:
@@ -95,16 +100,20 @@ with month_col:
 
 status = st.radio(
     "What happened *",
-    [interest.Kind.due.value, interest.Kind.given.value, TO_LEDGER],
-    format_func=lambda v: TO_LEDGER if v == TO_LEDGER else interest.Kind(v).label,
+    [interest.Kind.due.value, PARTLY, interest.Kind.given.value, TO_LEDGER],
+    format_func=STATUS_LABELS.get,
     horizontal=False, key=field("kind"),
     help=(
-        "Still due — they owe it. Given to me — they have paid it. The third "
+        "Still due — they owe it. Partly given — some of it has been paid and "
+        "the rest is still owed. Given to me — they have paid it all. The last "
         "also writes a ledger entry, for when the money went to somebody else."
     ),
 )
 to_ledger = status == TO_LEDGER
-kind = interest.Kind.given if to_ledger else interest.Kind(status)
+partly = status == PARTLY
+kind = interest.Kind.due if partly else (
+    interest.Kind.given if to_ledger else interest.Kind(status)
+)
 
 taker, taker_ledger = "", ""
 if to_ledger:
@@ -125,6 +134,13 @@ with amount_col:
 with purpose_col:
     purpose = st.text_input(
         "Purpose", placeholder="what this interest is for", key=field("purpose")
+    )
+paid_text = ""
+if partly:
+    paid_text = st.text_input(
+        f"Given so far ({currency.symbol}) *", placeholder="3000",
+        key=field("paid"),
+        help="What they have handed over. The rest is shown as still due.",
     )
 
 photo = st.file_uploader(
@@ -151,6 +167,15 @@ try:
 except ValueError as exc:
     minor = 0
     st.error(str(exc))
+try:
+    paid_minor = to_minor(paid_text) if paid_text.strip() else 0
+except ValueError as exc:
+    paid_minor = 0
+    st.error(str(exc))
+bad_paid = partly and minor > 0 and not 0 < paid_minor < minor
+if bad_paid and paid_text.strip():
+    st.error("Given so far must be more than nothing and less than the amount "
+             "— otherwise it is still due, or given in full.")
 
 already = interest.for_month(charges, month, currency).get(person)
 if already:
@@ -162,6 +187,8 @@ if already:
 absent = []
 if not amount_text.strip():
     absent.append("Amount")
+if partly and not paid_text.strip():
+    absent.append("Given so far")
 if to_ledger and not taker:
     absent.append("Who took it")
 if absent:
@@ -169,7 +196,10 @@ if absent:
 elif minor > 0:
     line = (
         f"**{format_money(minor, currency)}** interest from **{person}** "
-        f"for *{month:%B %Y}* — {kind.label.lower()}"
+        f"for *{month:%B %Y}* — "
+        + (f"{format_money(paid_minor, currency)} given, "
+           f"**{format_money(minor - paid_minor, currency)} still due**"
+           if partly and not bad_paid else kind.label.lower())
     )
     if to_ledger:
         line += (
@@ -179,7 +209,7 @@ elif minor > 0:
     st.info(line)
 
 if st.button("Save interest", type="primary",
-             disabled=minor <= 0 or (to_ledger and not taker)):
+             disabled=minor <= 0 or bad_paid or (to_ledger and not taker)):
     try:
         link = ""
         if photo is not None:
@@ -191,6 +221,7 @@ if st.button("Save interest", type="primary",
         what = interest.set_for_month(
             person, month, minor, currency=currency, note=purpose.strip(),
             kind=kind, attachment=link, source="manual",
+            paid_minor=paid_minor if partly else None,
         )
         wrote = ""
         if to_ledger:
@@ -222,6 +253,8 @@ if st.button("Save interest", type="primary",
         st.session_state["interest_saved_text"] = (
             f"{'Replaced' if what == 'updated' else 'Recorded'} "
             f"{format_money(minor, currency)} for {person}, {month:%B %Y}."
+            + (f" {format_money(minor - paid_minor, currency)} still due."
+               if partly else "")
             + wrote
         )
         st.rerun()
@@ -424,11 +457,19 @@ def _edit(charge) -> None:
         f"Amount ({charge.currency.symbol})",
         value=f"{charge.amount_minor / 100:.2f}",
     )
-    new_kind = st.radio(
-        "What happened", list(interest.Kind),
-        index=list(interest.Kind).index(charge.kind),
-        format_func=lambda k: k.label, horizontal=True,
+    choices = [interest.Kind.due.value, PARTLY, interest.Kind.given.value]
+    now = PARTLY if charge.partly_paid else charge.kind.value
+    happened = st.radio(
+        "What happened", choices, index=choices.index(now),
+        format_func=STATUS_LABELS.get, horizontal=True,
     )
+    paid_now_text = ""
+    if happened == PARTLY:
+        paid_now_text = st.text_input(
+            f"Given so far ({charge.currency.symbol})",
+            value=f"{charge.paid_minor / 100:.2f}" if charge.partly_paid else "",
+            help="What has been handed over. The rest stays as still due.",
+        )
     note = st.text_input("Purpose", value=charge.note)
     link, upload = attachment_field(charge, key="i")
 
@@ -437,13 +478,23 @@ def _edit(charge) -> None:
     # their name: re-saving against whoever happens to sort first would build a
     # different trail, miss the standing row, and append a second loan under
     # somebody who never took the money.
+    #
+    # Only offered once something has been given: money still owed cannot
+    # have been taken by anybody. Offering it on "Still due" is how a charge
+    # ended up handed on to Vihar in the ledger while its own row still read
+    # "Still due" — the ledger moved and the interest row never did.
     moved_already = charge.moved_to in everyone
-    also = st.checkbox(
-        "Someone else took this — add it to the main ledger",
+    also = happened != interest.Kind.due.value and st.checkbox(
+        "Someone else took what was given — add it to the main ledger",
         value=moved_already,
-        help="Writes a ledger entry for the amount, or corrects the one already "
-             "there. Nothing is written unless this is ticked.",
+        help="Writes a ledger entry for what was given, or corrects the one "
+             "already there. Nothing is written unless this is ticked.",
     )
+    if moved_already and not also:
+        # This page never removes a ledger row, so the mark stays with it —
+        # clearing it would count the same money here and there at once.
+        st.warning(f"{charge.moved_to} already has this in the ledger. That entry "
+                   "stays — remove it on the ledger if it was a mistake.")
     taker_now, book_now = "", ""
     if also:
         take, book = st.columns(2)
@@ -456,13 +507,25 @@ def _edit(charge) -> None:
     edited, problems = None, []
     try:
         minor_now = to_minor(amount)
+        paid_now = {
+            interest.Kind.due.value: 0,
+            interest.Kind.given.value: minor_now,
+        }.get(happened)
+        if paid_now is None:
+            paid_now = to_minor(paid_now_text) if paid_now_text.strip() else 0
         if minor_now <= 0:
             problems.append("Interest must be more than zero.")
+        elif happened == PARTLY and not 0 < paid_now < minor_now:
+            problems.append("Given so far must be more than nothing and less "
+                            "than the amount.")
         else:
             edited = replace(
-                charge, amount_minor=minor_now, kind=new_kind,
+                charge, amount_minor=minor_now, paid_minor=paid_now,
                 note=note.strip(), attachment=link.strip(), source="manual",
             )
+            if edited.partly_paid:
+                st.caption(f"**{format_money(edited.remaining_minor, charge.currency)}"
+                           "** still due after this.")
     except Exception as exc:  # noqa: BLE001
         problems.append(str(exc))
     for problem in problems:
@@ -529,7 +592,7 @@ for charge in shown:
             f'<span class="khata-amount '
             f'{"khata-back" if charge.kind is interest.Kind.given else "khata-out"}">'
             f'{charge.money()}</span>'
-            f'<span class="khata-dir">{esc(charge.kind.label)}</span>'
+            f'<span class="khata-dir">{esc(charge.status)}</span>'
             f'<span class="khata-who">{esc(charge.person)}</span>'
             f'<span class="khata-meta">· {charge.month_label}'
             + (f" · {esc(group)}" if group != charge.person else "")
@@ -580,7 +643,7 @@ st.subheader("Total by month")
 for bucket in reversed(interest.by_month(shown, currency)):
     label = next(c.month_label for c in shown if c.month == bucket["month"])
     of_month = [c for c in shown if c.month == bucket["month"]]
-    moved_here = sum(c.amount_minor for c in of_month if c.moved_to)
+    moved_here = sum(c.paid_minor for c in of_month if c.moved_to)
     st.markdown(
         f"- **{label}** — {format_money(bucket['total_minor'], currency)} "
         f"across {len(of_month)} "
@@ -599,6 +662,8 @@ for row in rows:
     st.markdown(
         f"- **{row['person']}** — {format_money(row['total_minor'], currency)} "
         f"over {row['months']} month{'s' if row['months'] != 1 else ''}"
+        + (f" · **{format_money(row['remaining_minor'], currency)} still due**"
+           if row["remaining_minor"] else " · all given")
         + (f" · under *{head}*" if head != row["person"] else "")
     )
 

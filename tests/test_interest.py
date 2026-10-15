@@ -490,7 +490,7 @@ class TestAddingAColumnDoesNotShiftExistingRows:
 
     def test_everything_added_since_came_after_them(self):
         assert set(interest.COLUMNS[len(self.ORIGINAL):]) == {
-            "kind", "attachment", "moved_to"
+            "kind", "attachment", "moved_to", "paid"
         }
 
     def test_a_row_written_before_the_columns_existed_still_reads(self):
@@ -845,3 +845,39 @@ class TestCarryingAMonthForward:
         monkeypatch.setattr(interest, "replace_row",
                             lambda *_a, **_kw: pytest.fail("must not write"))
         self.cloned()
+
+
+class TestPartPayments:
+    """₹3,000 given of ₹5,000 leaves ₹2,000 still due — and says so."""
+
+    AUG = date(2026, 8, 1)
+
+    def test_what_is_left_is_still_due(self):
+        c = interest.Charge(date=self.AUG, person="vinay", amount_minor=5_000_00,
+                            paid_minor=3_000_00)
+        assert c.kind is interest.Kind.due and c.remaining_minor == 2_000_00
+        assert "still due" in c.status
+        split = interest.split_by_kind([c], Currency.INR)
+        assert split == {interest.Kind.due: 2_000_00, interest.Kind.given: 3_000_00}
+        assert interest.by_person([c], Currency.INR)[0]["remaining_minor"] == 2_000_00
+
+    def test_a_charge_handed_on_reads_as_given_even_if_it_said_due(self):
+        """The edit dialog let "Still due" and "someone else took it" be saved
+        together: Vihar's ledger entry went in, Chaitu's row still read due."""
+        row = dict(zip(interest.COLUMNS, interest.Charge(
+            date=self.AUG, person="Chaitu", amount_minor=1_000_00,
+            moved_to="Vihar").to_row()))
+        row.update(kind="due", paid="")
+        assert interest.Charge.from_row(row).kind is interest.Kind.given
+
+    def test_only_what_was_given_reaches_the_ledger(self):
+        c = interest.Charge(date=self.AUG, person="Chaitu", amount_minor=2_000_00,
+                            paid_minor=1_000_00, moved_to="Vihar")
+        assert interest.ledger_entry(c, "Vihar", ledger="VIHAR").amount_minor == 1_000_00
+        assert interest.recorded_total([c], Currency.INR) == 1_000_00
+        assert interest.moved_total([c], Currency.INR) == 1_000_00
+
+    def test_the_dialog_does_not_offer_hand_on_for_money_still_owed(self):
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "views" / "interest.py").read_text()
+        assert "also = happened != interest.Kind.due.value and st.checkbox(" in src

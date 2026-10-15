@@ -30,7 +30,7 @@ WORKSHEET = "interest"
 #: one place to the right and silently rewrite people's history.
 COLUMNS = [
     "date", "person", "amount", "currency", "rate_percent", "note", "source",
-    "kind", "attachment", "moved_to",
+    "kind", "attachment", "moved_to", "paid",
 ]
 
 REQUIRED = ("date", "person", "amount")
@@ -85,12 +85,49 @@ class Charge:
     moved_to: str = ""
     source: str = ""
     row: int | None = field(default=None, compare=False)
+    #: How much of `amount_minor` has been handed over so far. A part-payment
+    #: — ₹3,000 of ₹5,000 — leaves the rest still due, and `kind` is derived
+    #: from this rather than trusted alongside it, so the two cannot disagree.
+    #: None (a row written before the column existed) reads as the old meaning:
+    #: all of it if the row said "given" or had been handed on, else nothing.
+    paid_minor: int | None = None
 
     def __post_init__(self) -> None:
         if not self.person.strip():
             raise EntryError("person is required")
         if self.amount_minor <= 0:
             raise EntryError("interest must be more than zero")
+        paid = self.paid_minor
+        if paid is None:
+            paid = self.amount_minor if (self.kind is Kind.given or self.moved_to) else 0
+        if paid < 0:
+            raise EntryError("given so far cannot be negative")
+        if paid > self.amount_minor:
+            raise EntryError("given so far is more than the interest itself")
+        object.__setattr__(self, "paid_minor", paid)
+        object.__setattr__(
+            self, "kind", Kind.given if paid >= self.amount_minor else Kind.due
+        )
+
+    @property
+    def remaining_minor(self) -> int:
+        """What is still owed on this month's interest."""
+        return self.amount_minor - self.paid_minor
+
+    @property
+    def partly_paid(self) -> bool:
+        return 0 < self.paid_minor < self.amount_minor
+
+    @property
+    def status(self) -> str:
+        """What the row says on screen — a part-payment names what is left."""
+        to = f" to {self.moved_to}" if self.moved_to else ""
+        if self.partly_paid:
+            return (f"Given {format_money(self.paid_minor, self.currency)}{to}, "
+                    f"{format_money(self.remaining_minor, self.currency)} still due")
+        if self.kind is Kind.given and to:
+            return f"Given{to}"
+        return self.kind.label
 
     @property
     def month(self) -> str:
@@ -112,6 +149,11 @@ class Charge:
             amount = to_minor(row["amount"])
         except ValueError as exc:
             raise EntryError(str(exc)) from exc
+        paid_text = str(row.get("paid") or "").strip()
+        try:
+            paid = to_minor(paid_text) if paid_text else None
+        except ValueError as exc:
+            raise EntryError(f"paid: {exc}") from exc
         try:
             rate = float(str(row.get("rate_percent") or 0) or 0)
         except ValueError:
@@ -128,11 +170,13 @@ class Charge:
             moved_to=str(row.get("moved_to") or "").strip(),
             source=str(row.get("source") or "").strip().lower(),
             row=row_number,
+            paid_minor=paid,
         )
 
     def to_row(self) -> list[str]:
         # divmod, not / 100 — a float must not reach the sheet.
         whole, frac = divmod(self.amount_minor, 100)
+        paid_whole, paid_frac = divmod(self.paid_minor, 100)
         return [
             self.date.isoformat(),
             self.person,
@@ -144,6 +188,7 @@ class Charge:
             self.kind.value,
             self.attachment,
             self.moved_to,
+            f"{paid_whole}.{paid_frac:02d}",
         ]
 
 
@@ -266,7 +311,8 @@ def set_for_month(person: str, when: date, amount_minor: int, *,
                   currency: Currency = Currency.INR, rate_percent: float = 0.0,
                   note: str = "", source: str = "manual",
                   kind: Kind = Kind.due, attachment: str = "",
-                  moved_to: str = "", secrets: dict | None = None) -> str:
+                  moved_to: str = "", paid_minor: int | None = None,
+                  secrets: dict | None = None) -> str:
     """Set one person's interest for one month. Returns what it did.
 
     One figure per person per month, so this is an upsert rather than an
@@ -292,12 +338,14 @@ def set_for_month(person: str, when: date, amount_minor: int, *,
         date=month_start(when), person=person, amount_minor=amount_minor,
         currency=currency, kind=kind, rate_percent=rate_percent, note=note,
         attachment=attachment, moved_to=moved_to, source=source,
+        paid_minor=paid_minor,
     )
     if existing is None:
         add(wanted, secrets)
         return "added"
     if (existing.amount_minor == amount_minor and existing.note == wanted.note
-            and existing.kind is kind and existing.attachment == attachment
+            and existing.paid_minor == wanted.paid_minor
+            and existing.attachment == attachment
             and existing.moved_to == moved_to):
         return "unchanged"
     replace_row(existing, wanted, secrets)
@@ -327,7 +375,9 @@ def ledger_entry(charge: Charge, person: str, *, ledger: str,
         person=person.strip(),
         ledger=ledger.strip() or "Interest",
         direction=Direction.given,
-        amount_minor=charge.amount_minor,
+        # What was actually handed on — part of the month when only part was
+        # paid. Nothing marked given yet means the whole charge went across.
+        amount_minor=charge.paid_minor or charge.amount_minor,
         currency=charge.currency,
         note=trail_note(charge, person, note),
         source=BY_HAND,
@@ -416,26 +466,33 @@ def recorded_total(charges: list[Charge], currency: Currency) -> int:
     same money twice.
     """
     return sum(
-        c.amount_minor for c in charges
-        if c.currency is currency and not c.moved_to
+        c.amount_minor - (c.paid_minor if c.moved_to else 0)
+        for c in charges if c.currency is currency
     )
 
 
 def moved_total(charges: list[Charge], currency: Currency) -> int:
     """How much interest has been handed on and now lives in the ledger."""
     return sum(
-        c.amount_minor for c in charges
+        c.paid_minor for c in charges
         if c.currency is currency and c.moved_to
     )
 
 
 def split_by_kind(charges: list[Charge], currency: Currency) -> dict[Kind, int]:
-    """How much is still due and how much has been handed over."""
+    """How much is still due and how much has been handed over.
+
+    A part-payment is split across both: ₹3,000 given and ₹2,000 still due,
+    not ₹5,000 in either. What was handed on to somebody else is counted in
+    the ledger, not here — but what is still owed on that month still is.
+    """
     out = {kind: 0 for kind in Kind}
     for charge in charges:
-        # A charge that has moved to the ledger is counted there, not here.
-        if charge.currency is currency and not charge.moved_to:
-            out[charge.kind] += charge.amount_minor
+        if charge.currency is not currency:
+            continue
+        out[Kind.due] += charge.remaining_minor
+        if not charge.moved_to:
+            out[Kind.given] += charge.paid_minor
     return out
 
 
@@ -447,17 +504,20 @@ def totals(charges: list[Charge], currency: Currency) -> int:
 def by_person(charges: list[Charge], currency: Currency) -> list[dict]:
     """Interest per person, most first."""
     totals_by: dict[str, int] = {}
+    left: dict[str, int] = {}
     months: dict[str, int] = {}
     last: dict[str, date] = {}
     for charge in charges:
         if charge.currency is not currency:
             continue
         totals_by[charge.person] = totals_by.get(charge.person, 0) + charge.amount_minor
+        left[charge.person] = left.get(charge.person, 0) + charge.remaining_minor
         months[charge.person] = months.get(charge.person, 0) + 1
         if charge.person not in last or charge.date > last[charge.person]:
             last[charge.person] = charge.date
     rows = [
         {"person": person, "total_minor": total, "months": months[person],
+         "remaining_minor": left[person],
          "last": last[person], "currency": currency}
         for person, total in totals_by.items()
     ]
@@ -724,6 +784,39 @@ def demo() -> None:
 
     # Cloning twice adds nothing the second time — everyone is already there.
     assert clone_month(book + todo, aug, sep, Currency.INR)[0] == []
+
+    # ------------------------------------------------ part-payments
+    vinay = Charge(date=aug, person="Vinay", amount_minor=5_000_00, paid_minor=3_000_00)
+    assert vinay.kind is Kind.due and vinay.remaining_minor == 2_000_00
+    assert "₹2,000" in vinay.status.replace(".00", ""), vinay.status
+    assert split_by_kind([vinay], Currency.INR) == {Kind.due: 2_000_00, Kind.given: 3_000_00}
+    back = Charge.from_row(dict(zip(COLUMNS, vinay.to_row())))
+    assert back.paid_minor == 3_000_00 and back.remaining_minor == 2_000_00
+    assert Charge(date=aug, person="V", amount_minor=100, paid_minor=100).kind is Kind.given
+
+    # Half handed on to Vihar: that half is a loan in the ledger, the rest is
+    # still interest Chaitu owes — nothing counted twice, nothing dropped.
+    half = Charge(date=aug, person="Chaitu", amount_minor=2_000_00,
+                  paid_minor=1_000_00, moved_to="Vihar")
+    assert ledger_entry(half, "Vihar", ledger="VIHAR").amount_minor == 1_000_00
+    assert moved_total([half], Currency.INR) == 1_000_00
+    assert recorded_total([half], Currency.INR) == 1_000_00
+    assert split_by_kind([half], Currency.INR) == {Kind.due: 1_000_00, Kind.given: 0}
+
+    # A row handed on before `paid` existed — even one left saying "due",
+    # which the edit dialog used to allow — reads as given in full, matching
+    # the ledger entry that was written for all of it.
+    old = dict(zip(COLUMNS, half.to_row()))
+    old.update(kind="due", paid="")
+    legacy = Charge.from_row(old)
+    assert legacy.kind is Kind.given and legacy.paid_minor == 2_000_00
+
+    try:
+        Charge(date=aug, person="X", amount_minor=100, paid_minor=200)
+    except EntryError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("paying more than the charge must be refused")
 
     print("ledger.interest: all checks passed")
 
