@@ -668,18 +668,32 @@ for _row in _owing:
 st.divider()
 st.subheader("Total by month")
 
+
+def _split(total: int, given: int, due: int) -> str:
+    """Charged, given and still due side by side — a total alone read as if
+    a month already paid (Narayana's July, handed to Vihar) were still owed."""
+    return (
+        f"{format_money(total, currency)} charged"
+        + (f" · :green[{format_money(given, currency)} given]" if given else "")
+        + (f" · :red[**{format_money(due, currency)} still due**]" if due
+           else " · :green[all given]")
+    )
+
+
 for bucket in reversed(interest.by_month(shown, currency)):
-    label = next(c.month_label for c in shown if c.month == bucket["month"])
-    of_month = [c for c in shown if c.month == bucket["month"]]
-    moved_here = sum(c.paid_minor for c in of_month if c.moved_to)
+    of_month = sorted((c for c in shown if c.month == bucket["month"]),
+                      key=lambda c: (-c.remaining_minor, c.person))
     st.markdown(
-        f"- **{label}** — {format_money(bucket['total_minor'], currency)} "
-        f"across {len(of_month)} "
-        f"{'charge' if len(of_month) == 1 else 'charges'}"
-        + (f" · {format_money(moved_here, currency)} of it moved to the ledger"
-           if moved_here else "")
-        + f" · **{format_money(sum(c.remaining_minor for c in of_month), currency)}"
-          " balance due**"
+        f"**{of_month[0].month_label}** — "
+        + _split(bucket["total_minor"], sum(c.paid_minor for c in of_month),
+                 sum(c.remaining_minor for c in of_month))
+        + "\n"
+        + "".join(
+            f"\n- {c.person} — {c.money()} · "
+            + (f":green[{c.status}]" if c.kind is interest.Kind.given
+               else f":red[{c.status}]")
+            for c in of_month
+        )
     )
 
 # ------------------------------------------------------------- by person
@@ -690,10 +704,9 @@ rows = interest.by_person(shown, currency)
 for row in rows:
     head = grouping.group_of(row["person"], parents)
     st.markdown(
-        f"- **{row['person']}** — {format_money(row['total_minor'], currency)} "
-        f"over {row['months']} month{'s' if row['months'] != 1 else ''}"
-        + (f" · **{format_money(row['remaining_minor'], currency)} still due**"
-           if row["remaining_minor"] else " · all given")
+        f"- **{row['person']}** — "
+        + _split(row["total_minor"], row["given_minor"], row["remaining_minor"])
+        + f" · over {row['months']} month{'s' if row['months'] != 1 else ''}"
         + (f" · under *{head}*" if head != row["person"] else "")
     )
 

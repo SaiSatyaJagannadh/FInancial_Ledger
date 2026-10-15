@@ -505,6 +505,7 @@ def by_person(charges: list[Charge], currency: Currency) -> list[dict]:
     """Interest per person, most first."""
     totals_by: dict[str, int] = {}
     left: dict[str, int] = {}
+    paid: dict[str, int] = {}
     months: dict[str, int] = {}
     last: dict[str, date] = {}
     for charge in charges:
@@ -512,12 +513,13 @@ def by_person(charges: list[Charge], currency: Currency) -> list[dict]:
             continue
         totals_by[charge.person] = totals_by.get(charge.person, 0) + charge.amount_minor
         left[charge.person] = left.get(charge.person, 0) + charge.remaining_minor
+        paid[charge.person] = paid.get(charge.person, 0) + charge.paid_minor
         months[charge.person] = months.get(charge.person, 0) + 1
         if charge.person not in last or charge.date > last[charge.person]:
             last[charge.person] = charge.date
     rows = [
         {"person": person, "total_minor": total, "months": months[person],
-         "remaining_minor": left[person],
+         "remaining_minor": left[person], "given_minor": paid[person],
          "last": last[person], "currency": currency}
         for person, total in totals_by.items()
     ]
