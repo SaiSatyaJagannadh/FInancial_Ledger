@@ -440,9 +440,12 @@ if not shown:
     st.stop()
 
 st.subheader(f"{len(shown)} charge{'s' if len(shown) != 1 else ''}")
-st.caption(
+_given = sum(c.paid_minor for c in shown)
+_due = sum(c.remaining_minor for c in shown)
+st.markdown(
     f"Showing {format_money(sum(c.amount_minor for c in shown), currency)} "
-    "of interest."
+    f"of interest · {format_money(_given, currency)} given · "
+    f"**{format_money(_due, currency)} balance due**"
 )
 
 
@@ -650,6 +653,8 @@ for bucket in reversed(interest.by_month(shown, currency)):
         f"{'charge' if len(of_month) == 1 else 'charges'}"
         + (f" · {format_money(moved_here, currency)} of it moved to the ledger"
            if moved_here else "")
+        + f" · **{format_money(sum(c.remaining_minor for c in of_month), currency)}"
+          " balance due**"
     )
 
 # ------------------------------------------------------------- by person
