@@ -115,7 +115,7 @@ def _pdf_text(data: bytes) -> str:
     text = "\n".join(pages).strip()
     if not text:
         raise UnreadableDocument(
-            "That PDF has no text in it — it is probably a scan. Screenshot the "
+            "That PDF has no text in it, so it is probably a scan. Screenshot the "
             "page and upload that instead; the image reader can handle it."
         )
     return text
@@ -188,7 +188,7 @@ def read(filename: str, data: bytes, mimetype: str = "") -> Readable:
     if len(text) > MAX_TEXT_CHARS:
         text = text[:MAX_TEXT_CHARS]
         note = (
-            f"Only the first {MAX_TEXT_CHARS:,} characters were read — the file "
+            f"Only the first {MAX_TEXT_CHARS:,} characters were read: the file "
             "is long. Split it if something near the end is missing."
         )
     return Readable(kind="text", text=text.strip(), note=note)

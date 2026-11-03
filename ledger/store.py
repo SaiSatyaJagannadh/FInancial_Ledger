@@ -417,7 +417,7 @@ def _why(exc: Exception) -> str:
     if code in RETRY_CODES:
         return (
             f"Google Sheets answered {code} on all {len(RETRY_WAITS) + 1} attempts. "
-            "That is Google's own service, not your sheet and not your data — it "
+            "That is Google's own service, not your sheet and not your data: it "
             "usually clears within a minute."
         )
     if code in (401, 403):
@@ -525,7 +525,7 @@ def delete(entry: Entry, secrets: dict | None = None) -> None:
     current = worksheet.row_values(entry.row)
     if not _same_entry(current, entry):
         raise RuntimeError(
-            f"Row {entry.row} no longer matches this entry — the sheet changed "
+            f"Row {entry.row} no longer matches this entry: the sheet changed "
             "since it was loaded. Reload and try again."
         )
     # Archived *before* the row goes, and a failure here stops the deletion:
@@ -585,7 +585,7 @@ def update(original: Entry, edited: Entry, secrets: dict | None = None) -> None:
     worksheet = _open_worksheet(secrets)
     if not _same_entry(worksheet.row_values(original.row), original):
         raise RuntimeError(
-            f"Row {original.row} no longer matches this entry — the sheet changed "
+            f"Row {original.row} no longer matches this entry: the sheet changed "
             "since it was loaded. Reload and try again."
         )
     row = edited.to_row()
@@ -661,7 +661,7 @@ def upload_attachment(
             "Attachments need a Drive folder. Two steps, both one-off:\n\n"
             "1. In Google Drive, make a folder and share it with "
             f"**{account}** as **Editor**.\n"
-            "2. Add its id — the last part of the folder's URL — to your "
+            "2. Add its id (the last part of the folder's URL) to your "
             "Streamlit secrets, above every [section] heading:\n\n"
             "```toml\n[drive]\nfolder_id = \"...\"\n```"
         )
@@ -702,7 +702,7 @@ def upload_attachment(
             f"Drive cannot see folder {folder}. Open it in Drive, press Share, "
             f"and add **{account}** as **Editor**. A service account has no "
             "storage of its own, so it can only write into a folder you share "
-            "with it — there is no way around this step."
+            "with it. There is no way around this step."
         )
     if response.status_code == 403 and "storage quota" in response.text:
         raise RuntimeError(

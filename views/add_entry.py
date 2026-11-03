@@ -12,7 +12,7 @@ from ledger.models import BY_HAND, Direction, Entry, EntryError
 from ledger.money import Currency, format_money, spoken, to_minor
 from ledger.ui import clear_cache, demo_banner, load_ledger, styles
 
-NEW = "➕ New…"
+NEW = "New…"
 
 styles()
 
@@ -20,13 +20,13 @@ result = load_ledger()
 demo_banner(result)
 
 st.title("Add Entry")
-st.caption("Fields marked * are required — the rest you can leave blank.")
+st.caption("Fields marked * are required. The rest you can leave blank.")
 
 currency = Currency(
     st.radio(
         "Currency",
         [c.value for c in Currency],
-        format_func=lambda v: f"{Currency(v).flag}  {Currency(v).label}",
+        format_func=lambda v: f"{Currency(v).symbol}  {Currency(v).label}",
         horizontal=True,
         help="Rupee and dollar ledgers are kept completely separate.",
     )
@@ -66,50 +66,56 @@ if st.session_state.pop("entry_saved", None):
     st.success(st.session_state.pop("entry_saved_text", "Entry added."))
 
 
-col_a, col_b = st.columns(2)
-with col_a:
-    person = picker("Person", people, "person")
-with col_b:
-    ledger_name = picker("Ledger", ledgers_for.get(person, []), "ledger")
+# The form, and beside it a slip saying exactly what Save will write. The slip is
+# what gets read before the button is pressed, so the two sit together. On a
+# phone the columns stack and the slip comes after the form, still above Save.
+form, side = st.columns([3, 2], gap="large")
 
-col_c, col_d, col_e = st.columns([1, 1, 1])
-with col_c:
-    when = st.date_input("Date *", value=date.today(), format="DD/MM/YYYY")
-with col_d:
+with form:
+    col_a, col_b = st.columns(2)
+    with col_a:
+        person = picker("Person", people, "person")
+    with col_b:
+        ledger_name = picker("Ledger", ledgers_for.get(person, []), "ledger")
+
     direction = st.radio(
         "Direction",
         [Direction.given, Direction.received],
         format_func=lambda d: "I gave them" if d is Direction.given else "They gave me back",
-        horizontal=False,
+        horizontal=True,
     )
-with col_e:
-    amount_text = st.text_input(
-        f"Amount ({currency.symbol}) *", placeholder="1500", key=field("amount")
-    )
-    # Read the figure back in lakhs. An extra zero is hard to see in "2500000"
-    # and impossible to miss in "25 lakh".
-    try:
-        _typed = to_minor(amount_text) if amount_text.strip() else 0
-    except ValueError:
-        _typed = 0
-    if _typed > 0:
-        _short = spoken(_typed, currency)
-        st.caption(
-            f"= {format_money(_typed, currency)}" + (f"  ·  **{_short}**" if _short else "")
+
+    col_c, col_d = st.columns(2)
+    with col_c:
+        amount_text = st.text_input(
+            f"Amount ({currency.symbol}) *", placeholder="1500", key=field("amount")
         )
+        # Read the figure back in lakhs. An extra zero is hard to see in "2500000"
+        # and impossible to miss in "25 lakh".
+        try:
+            _typed = to_minor(amount_text) if amount_text.strip() else 0
+        except ValueError:
+            _typed = 0
+        if _typed > 0:
+            _short = spoken(_typed, currency)
+            st.caption(
+                f"= {format_money(_typed, currency)}" + (f"  ·  **{_short}**" if _short else "")
+            )
+    with col_d:
+        when = st.date_input("Date *", value=date.today(), format="DD/MM/YYYY")
 
-note = st.text_input("Note", placeholder="UPI, cash, cheque…", key=field("note"))
+    note = st.text_input("Note", placeholder="UPI, cash, cheque…", key=field("note"))
 
-statement = st.file_uploader(
-    "Bank statement or receipt (optional)",
-    type=["pdf", "png", "jpg", "jpeg", "webp"],
-    key=field("statement"),
-    help=(
-        f"Kept inside the spreadsheet, up to {attach.MAX_BYTES // 1024} KB. "
-        "Google does not allow this app to write to your Drive, so a link you "
-        "paste yourself works too — put it in the entry's Edit box."
-    ),
-)
+    statement = st.file_uploader(
+        "Bank statement or receipt (optional)",
+        type=["pdf", "png", "jpg", "jpeg", "webp"],
+        key=field("statement"),
+        help=(
+            f"Kept inside the spreadsheet, up to {attach.MAX_BYTES // 1024} KB. "
+            "Google does not allow this app to write to your Drive, so a link you "
+            "paste yourself works too. Put it in the entry's Edit box."
+        ),
+    )
 
 # Validate before offering to save, so the preview is the thing that gets saved.
 problems: list[str] = []
@@ -119,7 +125,7 @@ if amount_text.strip():
     try:
         minor = to_minor(amount_text)
         if minor <= 0:
-            problems.append("Amount must be more than zero — use Direction to say which way.")
+            problems.append("Amount must be more than zero. Use Direction to say which way.")
         else:
             entry = Entry(
                 date=when,
@@ -136,63 +142,64 @@ if amount_text.strip():
     except EntryError as exc:
         problems.append(str(exc))
 
-if entry is not None:
-    verb = "give" if direction is Direction.given else "get back"
-    st.info(
-        f"**{format_money(entry.amount_minor, entry.currency)}** — you {verb} this "
-        f"{'to' if direction is Direction.given else 'from'} **{entry.person}** "
-        f"on *{entry.ledger}*, dated {entry.date:%d %b %Y}."
-    )
-
-# Name what is still missing rather than leaving a dead button with no reason.
-absent = []
-if not str(person or "").strip():
-    absent.append("Person")
-if not str(ledger_name or "").strip():
-    absent.append("Ledger")
-if not amount_text.strip():
-    absent.append("Amount")
-if absent:
-    st.warning("Still needed: **" + "**, **".join(absent) + "**")
-
-for problem in problems:
-    st.error(problem)
-
-ready = entry is not None and not problems
-if st.button("Save entry", type="primary", disabled=not ready):
-    try:
-        if statement is not None:
-            # Upload first: a saved row pointing at a file that never arrived
-            # would be worse than failing before anything is written.
-            with st.spinner(f"Storing {statement.name}…"):
-                link = attach.put(
-                    statement.name,
-                    statement.getvalue(),
-                    statement.type or "application/octet-stream",
-                )
-            entry = replace(entry, attachment=link)
-        store.append(entry)
-    except RuntimeError as exc:
-        # Demo mode: say so rather than pretending the row was written.
-        st.warning(str(exc))
-    except Exception as exc:
-        st.error(f"Could not save: {type(exc).__name__}: {exc}")
-    else:
-        clear_cache()
-        short = spoken(entry.amount_minor, entry.currency)
-        st.session_state["form_round"] = ROUND + 1   # a fresh, empty form
-        st.session_state["entry_saved"] = True
-        st.session_state["entry_saved_text"] = (
-            f"Added {format_money(entry.amount_minor, entry.currency)}"
-            + (f" ({short})" if short else "")
-            + f" for {entry.person} on {entry.ledger}. Ready for the next one."
+with side, st.container(key="khata-slip"):
+    if entry is not None:
+        verb = "give" if direction is Direction.given else "get back"
+        st.info(
+            f"**{format_money(entry.amount_minor, entry.currency)}**: you {verb} this "
+            f"{'to' if direction is Direction.given else 'from'} **{entry.person}** "
+            f"on *{entry.ledger}*, dated {entry.date:%d %b %Y}."
         )
-        st.rerun()
 
-st.caption(
-    "Amounts are always positive — Direction decides whether it counts as money out "
-    "or money back."
-)
+    # Name what is still missing rather than leaving a dead button with no reason.
+    absent = []
+    if not str(person or "").strip():
+        absent.append("Person")
+    if not str(ledger_name or "").strip():
+        absent.append("Ledger")
+    if not amount_text.strip():
+        absent.append("Amount")
+    if absent:
+        st.warning("Still needed: **" + "**, **".join(absent) + "**")
+
+    for problem in problems:
+        st.error(problem)
+
+    ready = entry is not None and not problems
+    if st.button("Save entry", type="primary", disabled=not ready, width="stretch"):
+        try:
+            if statement is not None:
+                # Upload first: a saved row pointing at a file that never arrived
+                # would be worse than failing before anything is written.
+                with st.spinner(f"Storing {statement.name}…"):
+                    link = attach.put(
+                        statement.name,
+                        statement.getvalue(),
+                        statement.type or "application/octet-stream",
+                    )
+                entry = replace(entry, attachment=link)
+            store.append(entry)
+        except RuntimeError as exc:
+            # Demo mode: say so rather than pretending the row was written.
+            st.warning(str(exc))
+        except Exception as exc:
+            st.error(f"Could not save: {type(exc).__name__}: {exc}")
+        else:
+            clear_cache()
+            short = spoken(entry.amount_minor, entry.currency)
+            st.session_state["form_round"] = ROUND + 1   # a fresh, empty form
+            st.session_state["entry_saved"] = True
+            st.session_state["entry_saved_text"] = (
+                f"Added {format_money(entry.amount_minor, entry.currency)}"
+                + (f" ({short})" if short else "")
+                + f" for {entry.person} on {entry.ledger}. Ready for the next one."
+            )
+            st.rerun()
+
+    st.caption(
+        "Amounts are always positive. Direction decides whether it counts as money out "
+        "or money back."
+    )
 
 st.divider()
 st.page_link(

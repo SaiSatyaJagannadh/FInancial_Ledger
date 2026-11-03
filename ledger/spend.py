@@ -345,7 +345,7 @@ def remove(transaction: Transaction, secrets: dict | None = None) -> None:
     sheet = _sheet(secrets)
     if not _matches(sheet.row_values(transaction.row), transaction):
         raise RuntimeError(
-            f"Row {transaction.row} no longer matches — the sheet changed since "
+            f"Row {transaction.row} no longer matches: the sheet changed since "
             "it was loaded. Reload and try again."
         )
     store.delete_row(sheet, transaction.row)
@@ -361,7 +361,7 @@ def replace_row(original: Transaction, edited: Transaction, secrets: dict | None
     sheet = _sheet(secrets)
     if not _matches(sheet.row_values(original.row), original):
         raise RuntimeError(
-            f"Row {original.row} no longer matches — the sheet changed since it "
+            f"Row {original.row} no longer matches: the sheet changed since it "
             "was loaded. Reload and try again."
         )
     row = edited.to_row()

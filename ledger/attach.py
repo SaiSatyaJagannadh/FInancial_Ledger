@@ -73,7 +73,7 @@ def put(name: str, data: bytes, mimetype: str, secrets: dict | None = None) -> s
         raise RuntimeError(
             f"{name} is {len(data) // 1024} KB. The limit is "
             f"{MAX_BYTES // 1024} KB, because attachments live inside the "
-            "spreadsheet — Google will not let this app write to Drive. "
+            "spreadsheet. Google will not let this app write to Drive. "
             "Attach a single page, or paste a link instead."
         )
 

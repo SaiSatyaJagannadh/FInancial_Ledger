@@ -288,7 +288,7 @@ def _post(payload: dict, api_key: str, timeout: int) -> str:
         except requests.exceptions.Timeout:
             last = (
                 f"The model did not answer within {timeout} seconds. "
-                "It is usually busy rather than broken — try again."
+                "It is usually busy rather than broken. Try again."
             )
         except requests.exceptions.ConnectionError:
             last = "Could not reach the model. Check the connection and try again."
@@ -381,7 +381,7 @@ def _to_charges(raw_rows, people: list[str] | None, said: str = "",
             if "amount" in str(exc) and row["rate_percent"].strip():
                 problems.append(
                     f"interest for {who}: {row['rate_percent']}% of nothing is "
-                    "nothing — they do not owe anything right now."
+                    "nothing: they do not owe anything right now."
                 )
             else:
                 problems.append(f"interest for {who}: {exc}")

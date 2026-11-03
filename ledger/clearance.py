@@ -240,7 +240,7 @@ def replace_row(original: Clearance, edited: Clearance,
     sheet = _sheet(secrets)
     if not _matches(sheet.row_values(original.row), original):
         raise RuntimeError(
-            f"Row {original.row} no longer matches — the sheet changed since it "
+            f"Row {original.row} no longer matches: the sheet changed since it "
             "was loaded. Reload and try again."
         )
     row = edited.to_row()
@@ -259,7 +259,7 @@ def remove(record: Clearance, secrets: dict | None = None) -> None:
     sheet = _sheet(secrets)
     if not _matches(sheet.row_values(record.row), record):
         raise RuntimeError(
-            f"Row {record.row} no longer matches — the sheet changed since it "
+            f"Row {record.row} no longer matches: the sheet changed since it "
             "was loaded. Reload and try again."
         )
     # Archived *before* the row goes, and a failure here stops the deletion —

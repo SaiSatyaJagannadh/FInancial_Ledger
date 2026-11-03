@@ -174,7 +174,7 @@ def _ranking(text: str, entries: list) -> str | None:
         for place, summary in enumerate(rows, start=1):
             net = summary.net_minor
             side = "owes you" if net > 0 else "you owe"
-            lines.append(f"{place}. **{summary.person}** — {side} {_money(abs(net), currency)}")
+            lines.append(f"{place}. **{summary.person}**: {side} {_money(abs(net), currency)}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks) or None
 
@@ -192,7 +192,7 @@ def _totals(text: str, entries: list) -> str | None:
     for currency in _currencies(entries):
         overall = totals([e for e in entries if e.currency is currency], currency)
         lines.append(
-            f"**{currency.label}** — still owed to you: "
+            f"**{currency.label}**, still owed to you: "
             f"**{_money(overall.net_minor, currency)}**  \n"
             f"given {format_money(overall.given_minor, currency)} − received "
             f"{format_money(overall.received_minor, currency)}, across "
@@ -236,7 +236,7 @@ def _last_activity(text: str, entries: list) -> str | None:
     latest = max(mine, key=lambda e: (e.date, e.row or 0))
     verb = "gave them" if latest.direction is Direction.given else "got back"
     return (
-        f"The last entry for **{who}** is **{latest.date:%d %b %Y}** — you {verb} "
+        f"The last entry for **{who}** is **{latest.date:%d %b %Y}**: you {verb} "
         f"**{_money(latest.amount_minor, latest.currency)}** on *{latest.ledger}*"
         + (f", noted “{latest.note}”." if latest.note else ".")
     )
@@ -254,7 +254,7 @@ def _largest(text: str, entries: list) -> str | None:
         top = max(mine, key=lambda e: e.amount_minor)
         verb = "gave" if top.direction is Direction.given else "got back"
         lines.append(
-            f"**{currency.label}** — the largest single entry is "
+            f"**{currency.label}**: the largest single entry is "
             f"**{_money(top.amount_minor, currency)}**: you {verb} it "
             f"{'to' if top.direction is Direction.given else 'from'} "
             f"**{top.person}** on *{top.ledger}*, {top.date:%d %b %Y}."
@@ -271,14 +271,14 @@ def _open_ledgers(text: str, entries: list) -> str | None:
 
     rows = [r for r in ledger_breakdown(entries) if r["open"]]
     if not rows:
-        return "Every ledger is settled — nothing is outstanding."
+        return "Every ledger is settled. Nothing is outstanding."
     rows.sort(key=lambda r: -abs(r["net_minor"]))
     lines = [f"{len(rows)} ledger{'s' if len(rows) != 1 else ''} still open:"]
     for row in rows:
         net = row["net_minor"]
         side = "owes you" if net > 0 else "you owe"
         lines.append(
-            f"- **{row['person']}** · *{row['ledger']}* — {side} "
+            f"- **{row['person']}**, *{row['ledger']}*: {side} "
             f"{_money(abs(net), row['currency'])}"
         )
     return "\n".join(lines)
@@ -323,7 +323,7 @@ def _group_balance(text: str, entries: list, parents: dict) -> str | None:
         for summary in by_person(mine, currency):
             mark = " *(head)*" if summary.person == head else ""
             lines.append(
-                f"- **{summary.person}**{mark} — {_money(summary.net_minor, currency)}"
+                f"- **{summary.person}**{mark}: {_money(summary.net_minor, currency)}"
             )
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks) or None
@@ -353,7 +353,7 @@ def answer(question: str, entries: list, *, today: date | None = None,
     if not text:
         return None
     if not entries:
-        return "The ledger is empty — nothing has been recorded yet."
+        return "The ledger is empty. Nothing has been recorded yet."
 
     # A question pointed at somebody we cannot identify — an unknown name, or
     # two known ones at once — gets no answer at all. Falling back to the whole

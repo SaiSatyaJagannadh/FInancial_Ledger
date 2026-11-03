@@ -31,7 +31,7 @@ rate_col, freq_col = st.columns([2, 2])
 with rate_col:
     rate = st.slider(
         "Interest rate (% a year)", min_value=1.0, max_value=15.0, value=7.0, step=0.25,
-        help="Indian bank FDs sit around 6–7.5%. Set it to whatever you'd actually have got.",
+        help="Indian bank FDs sit around 6 to 7.5%. Set it to whatever you'd actually have got.",
     )
 with freq_col:
     frequency = st.selectbox(
@@ -46,11 +46,11 @@ for currency in Currency:
         continue
 
     st.divider()
-    st.subheader(f"{currency.flag}  {currency.label}")
+    st.subheader(f"{currency.symbol}  {currency.label}")
 
     total = what_if(entries, rate_percent=rate, periods_per_year=periods)
     if total.principal_minor <= 0:
-        st.success("Nothing outstanding here — it has all come back.")
+        st.success("Nothing outstanding here. It has all come back.")
         continue
 
     one, two, three = st.columns(3)

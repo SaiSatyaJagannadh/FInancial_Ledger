@@ -282,7 +282,7 @@ def set_password(email: str, password: str, secrets: dict | None = None) -> Acco
     cells = sheet.row_values(account.row)
     if not cells or str(cells[0]).strip().lower() != address:
         raise RuntimeError(
-            f"Row {account.row} no longer holds that account — the users tab "
+            f"Row {account.row} no longer holds that account: the users tab "
             "changed since it was read. Try again."
         )
 
@@ -342,7 +342,7 @@ def send_reset_code(account: Account, code: str,
         "[Personal Ledger] Your password reset code",
         f"Your reset code is {code}\n\n"
         "It works once, in the browser tab you asked from, for the next "
-        f"{RESET_MINUTES} minutes. If you did not ask for it, ignore this — "
+        f"{RESET_MINUTES} minutes. If you did not ask for it, ignore this: "
         "nothing has changed on your account.\n",
         to_them,
     )

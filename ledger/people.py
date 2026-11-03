@@ -193,7 +193,7 @@ def set_parent(person: str, parent: str, secrets: dict | None = None) -> None:
     current = {m.person: m for m in existing}
     if would_cycle(person, parent, mapping(existing)):
         raise RuntimeError(
-            f"Grouping {person} under {parent} would make a loop — "
+            f"Grouping {person} under {parent} would make a loop: "
             f"{parent} already rolls up to {person}."
         )
 
@@ -219,7 +219,7 @@ def _announce(kind: str, action: str, *, before=None, after=None,
 
     if not _matches(sheet.row_values(was.row), was):
         raise RuntimeError(
-            f"Row {was.row} no longer matches — the sheet changed since it was "
+            f"Row {was.row} no longer matches: the sheet changed since it was "
             "loaded. Reload and try again."
         )
     row = member.to_row()
@@ -246,7 +246,7 @@ def remove(person: str, secrets: dict | None = None) -> None:
     sheet = _sheet(secrets)
     if not _matches(sheet.row_values(was.row), was):
         raise RuntimeError(
-            f"Row {was.row} no longer matches — reload and try again."
+            f"Row {was.row} no longer matches. Reload and try again."
         )
     store.delete_row(sheet, was.row)
     _announce("Grouping", "deleted", before=was, secrets=secrets)

@@ -385,9 +385,9 @@ def summary_text(entries: list[Entry], *, today: date | None = None,
     """A short, readable statement of the ledger, for pasting into a message."""
     today = today or date.today()
     if not entries:
-        return f"Personal Ledger — {today:%d %b %Y}\nNothing recorded yet."
+        return f"Personal Ledger, {today:%d %b %Y}\nNothing recorded yet."
 
-    lines = [f"Personal Ledger — as of {today:%d %b %Y}", ""]
+    lines = [f"Personal Ledger, as of {today:%d %b %Y}", ""]
     for currency in Currency:
         subset = [e for e in entries if e.currency is currency]
         if not subset:

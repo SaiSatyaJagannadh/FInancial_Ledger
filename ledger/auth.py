@@ -25,7 +25,7 @@ import time
 
 import streamlit as st
 
-from ledger.ui import INK, PAPER, RULE, SHADE   # the ledger's own colours, so
+from ledger.ui import styles   # the ledger's own colours, so
                                                 # the way in looks like the
                                                 # thing it leads to
 
@@ -336,12 +336,12 @@ def signed_in_account():
 #: are `min(…, 100% - margin)` rather than fixed, type is `clamp()`ed, the
 #: buttons fill their width so they can be hit with a thumb, and the tab row
 #: wraps instead of scrolling a third tab out of sight.
-_AUTH_CSS = f"""
+_AUTH_CSS = """
 <style>
   [data-testid="stSidebar"],
   [data-testid="stSidebarNav"],
   [data-testid="stSidebarCollapsedControl"],
-  header[data-testid="stHeader"] {{ display: none !important; }}
+  header[data-testid="stHeader"] { display: none !important; }
 
   /* Centred in the window, not pinned to the top — a short card (the signed-out
      screen is four lines and a button) floating under a header-shaped gap looks
@@ -349,82 +349,68 @@ _AUTH_CSS = f"""
      `center`: when the card is taller than the phone it holds it, the top of an
      overflowing form would otherwise be scrolled off above the viewport and
      unreachable. */
-  .stMain {{ display: flex; justify-content: center; align-items: safe center; }}
+  .stMain { display: flex; justify-content: center; align-items: safe center; }
 
   /* The card. Padding scales with the viewport so a phone does not spend a
      third of its screen on the space above the mark. */
-  .block-container {{
+  .stMain .block-container {
       /* Against the viewport, not the parent: `100%` of a full-bleed parent is
          a card with its edges flush to both sides of a phone. */
       width: min(25rem, calc(100vw - 2rem));
       max-width: 25rem;
       margin: 1.25rem auto;
       padding: clamp(1.4rem, 5vw, 2.2rem) clamp(1.2rem, 5vw, 2rem) 1.4rem;
-      background: {PAPER};
-      border: 1px solid {RULE};
-      border-radius: 18px;
-      box-shadow: 0 1px 2px rgba(22, 32, 46, .04),
-                  0 14px 34px -22px rgba(22, 32, 46, .45);
-  }}
+      background: var(--color-sheet);
+      border: 1px solid var(--color-rule);
+      border-radius: var(--radius-card);
+  }
 
   /* The mark is a struck seal, not a stray character — ink block, cream glyph,
      the one place on the screen the ledger's own colour appears. */
-  .auth-mark {{
-      width: 42px; height: 42px; border-radius: 11px;
-      background: {INK}; color: {PAPER};
+  .auth-mark {
+      width: 42px; height: 42px; border-radius: var(--radius-card);
+      background: var(--color-ink); color: var(--color-sheet);
       display: flex; align-items: center; justify-content: center;
-      font-size: 1.32rem; font-weight: 600; line-height: 1;
+      font-family: var(--font-display); font-size: 1.32rem; font-weight: 600; line-height: 1;
       margin-bottom: .85rem;
-  }}
-  .auth-name {{
-      font-size: clamp(1.35rem, 5.5vw, 1.6rem); font-weight: 700;
-      letter-spacing: -0.02em; color: {INK}; margin: 0 0 .2rem 0;
+  }
+  .auth-name {
+      font-family: var(--font-display);
+      font-size: clamp(1.35rem, 5.5vw, 1.6rem); font-weight: 600;
+      letter-spacing: var(--tracking-display); color: var(--color-ink); margin: 0 0 .2rem 0;
       line-height: 1.15;
-  }}
-  .auth-sub {{
-      font-size: .9rem; opacity: .62; margin: 0 0 1.35rem 0; line-height: 1.5;
-  }}
+  }
+  .auth-sub {
+      font-size: .9rem; color: var(--color-muted); margin: 0 0 1.35rem 0; line-height: 1.5;
+  }
 
   /* The form is inside the card, so it draws no box of its own. */
-  div[data-testid="stForm"] {{
+  div[data-testid="stForm"] {
       border: 0; padding: 0; background: transparent;
-  }}
+  }
 
   /* Wrapping, not scrolling. A tab that has scrolled off the right of a narrow
      phone is a route nobody finds, and on this screen that route is the way
      back into a locked-out account. Addressed by ARIA role and testid rather
      than by Streamlit's generated class names, which change between releases. */
-  [role="tablist"] {{
+  [role="tablist"] {
       flex-wrap: wrap; gap: .2rem 1.1rem; overflow-x: visible;
       margin-bottom: .35rem;
-  }}
-  [data-testid="stTab"] {{ padding-left: 0; padding-right: 0; }}
-  [data-testid="stTab"] p {{ font-size: .9rem; font-weight: 600; }}
-
-  /* Fields read as fields: a hairline box on the card, not a grey slab. */
-  [data-testid="stTextInputRootElement"] {{
-      background: #FFFFFF; border: 1px solid {RULE}; border-radius: 10px;
-  }}
-  [data-testid="stTextInputRootElement"]:focus-within {{ border-color: {INK}; }}
-  .stTextInput label p {{ font-size: .85rem; font-weight: 600; opacity: .75; }}
-
-  /* Streamlit's alerts arrive in a blue that belongs to no other part of this
-     app. On paper they become a ruled note. */
-  [data-testid="stAlertContainer"] {{
-      background: {SHADE}; border-radius: 10px; border-left: 3px solid {INK};
-  }}
-  [data-testid="stAlert"] p {{ color: {INK}; font-size: .86rem; line-height: 1.5; }}
+  }
+  [data-testid="stTab"] { padding-left: 0; padding-right: 0; }
+  [data-testid="stTab"] p { font-size: .9rem; font-weight: 600; }
 
   /* 44px is the smallest thing a thumb reliably hits; these come out at 46. */
-  .stButton button, .stFormSubmitButton button {{
-      border-radius: 10px; font-weight: 600; padding: .68rem 1rem; width: 100%;
-  }}
+  .stButton button, .stFormSubmitButton button {
+      font-weight: 600; padding: .68rem 1rem; width: 100%;
+  }
 </style>
 """
 
 
 def _auth_chrome(sub: str = "") -> None:
     """Strip the app down to the screen in front of you, and head it."""
+    styles()    # the gate runs before any view has drawn the tokens this CSS reads
     st.markdown(_AUTH_CSS, unsafe_allow_html=True)
     st.markdown(
         '<div class="auth-mark">₹</div>'
@@ -491,7 +477,7 @@ def _password_gate() -> None:
 
     if first_ever:
         st.info(
-            "No accounts yet. The first one created becomes yours — make it now, "
+            "No accounts yet. The first one created becomes yours, so make it now, "
             "before the app is shared with anybody."
         )
 

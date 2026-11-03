@@ -250,7 +250,7 @@ def _forget(deletion: Deletion, secrets: dict) -> None:
     cells = sheet.row_values(deletion.row)
     if len(cells) < 2 or str(cells[1]).strip().lower() != deletion.kind:
         raise RuntimeError(
-            f"Archive row {deletion.row} no longer matches — the tab changed "
+            f"Archive row {deletion.row} no longer matches: the tab changed "
             "since it was loaded. Reload and try again."
         )
     store.delete_row(sheet, deletion.row)

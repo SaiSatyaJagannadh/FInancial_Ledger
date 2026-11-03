@@ -557,7 +557,7 @@ def reminder(row: dict) -> str:
         lines.append(line)
     total = format_money(row["remaining_minor"], row["charges"][0].currency)
     return (
-        f"Hi {row['person']}, a gentle reminder — {total} of interest is still "
+        f"Hi {row['person']}, a gentle reminder: {total} of interest is still "
         "due:\n" + "\n".join(lines) + "\nPlease send it when you can. Thank you!"
     )
 
@@ -703,7 +703,7 @@ def remove(charge: Charge, secrets: dict | None = None) -> None:
     sheet = _sheet(secrets)
     if not _matches(sheet.row_values(charge.row), charge):
         raise RuntimeError(
-            f"Row {charge.row} no longer matches — the sheet changed since it "
+            f"Row {charge.row} no longer matches: the sheet changed since it "
             "was loaded. Reload and try again."
         )
     from ledger import archive
@@ -722,7 +722,7 @@ def replace_row(original: Charge, edited: Charge, secrets: dict | None = None) -
     sheet = _sheet(secrets)
     if not _matches(sheet.row_values(original.row), original):
         raise RuntimeError(
-            f"Row {original.row} no longer matches — the sheet changed since it "
+            f"Row {original.row} no longer matches: the sheet changed since it "
             "was loaded. Reload and try again."
         )
     row = edited.to_row()

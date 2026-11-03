@@ -1,13 +1,51 @@
 # A khata is ruled in two inks. Ink blue-black carries the interface; vermilion
-# and green are reserved for direction of money and are set in ledger/ui.py.
+# and green are reserved for direction of money.
 # Deliberately not cream-and-terracotta: this is paper, not parchment.
+#
+# These are the same colours as ledger/styles/tokens.css. Streamlit draws its own
+# widgets from this file and cannot read a CSS variable, so the values live in
+# both places and tests/test_theme.py fails if they stop matching.
 [theme]
 base = "light"
 primaryColor = "#1B3A5C"
 backgroundColor = "#F7F6F2"
-secondaryBackgroundColor = "#EDEBE3"
+secondaryBackgroundColor = "#FFFDF9"
 textColor = "#16202E"
-font = "sans serif"
+linkColor = "#1B3A5C"
+borderColor = "#8A8F96"
+showWidgetBorder = true
+baseRadius = "4px"
+buttonRadius = "4px"
+
+font = "IBM Plex Sans:https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&display=swap, sans-serif"
+headingFont = "Newsreader:https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600&display=swap, Georgia, serif"
+codeFont = "monospace"
+headingFontSizes = ["2.074rem", "1.44rem", "1.44rem", "1.2rem", "1rem", "1rem"]
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+
+redColor = "#B3261E"
+greenColor = "#1B7A5A"
+redTextColor = "#B3261E"
+greenTextColor = "#1B7A5A"
+yellowTextColor = "#5C4708"
+blueTextColor = "#16202E"
+redBackgroundColor = "#F8E7E4"
+greenBackgroundColor = "#EAF3EE"
+yellowBackgroundColor = "#F3EBD3"
+blueBackgroundColor = "#E9ECEF"
+
+# Five series, none of them red or green: on this app those two say which way
+# money moved, so a person's bar must not borrow them. Checked with the dataviz
+# validator against the paper; add a sixth series only by re-running it.
+chartCategoricalColors = ["#2F6299", "#B4842A", "#8A4E96", "#3E9CC4", "#A0662F"]
+
+[theme.sidebar]
+backgroundColor = "#EDEBE3"
+secondaryBackgroundColor = "#FFFDF9"
+
+[client]
+# Hides the Deploy button and the developer menu, which are not part of a ledger.
+toolbarMode = "minimal"
 
 [server]
 maxUploadSize = 25

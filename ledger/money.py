@@ -28,10 +28,6 @@ class Currency(str, enum.Enum):
         return {"INR": "Indian Rupees", "USD": "US Dollars"}[self.value]
 
     @property
-    def flag(self) -> str:
-        return {"INR": "🇮🇳", "USD": "🇺🇸"}[self.value]
-
-    @property
     def minor_name(self) -> str:
         return {"INR": "paise", "USD": "cents"}[self.value]
 

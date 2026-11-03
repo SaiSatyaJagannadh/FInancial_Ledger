@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~845)
+.venv/bin/python -m pytest -q                     # all tests (~855)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -361,6 +361,41 @@ one) or a right-sized image. Oversized photos are **shrunk, never refused**.
   `ui.esc()`**, and any URL through `ui.safe_href()` (http/https only). Notes
   are free text and are also written by the model from uploaded documents.
 
+### The look (`design.md`, `ledger/styles/`)
+
+**`design.md` is the locked system; read it before changing how anything looks.**
+`ledger/styles/` holds `tokens.css`, `base.css` and `ledger.css`, read once at import
+and injected by `ui.styles()` through `st.html`, which takes no room on the page when it
+holds only a style tag. Streamlit draws its own widgets from `.streamlit/config.toml` and
+cannot read a CSS variable, so the colours live in both places, as hex, and
+`tests/test_theme.py` fails if they drift. It also fails if a chart series borrows the red
+or green of money. Faces were chosen for the rupee: check any replacement has a real `₹`
+glyph and equal-width digits, because several popular ones have no `₹` at all.
+
+**The stylesheet addresses `data-testid` and ARIA roles, and they change.** The radios
+became `stRadioOption` / `data-selected` somewhere after 1.49, which is why
+`requirements.txt` now floors Streamlit at 1.66. Anything unmatched just stops being
+styled, with no error, so look at the page after a Streamlit upgrade.
+
+**`stMarkdownContainer` has `margin-bottom: -1rem`.** It cancels the bottom margin of the
+paragraph Streamlit expects inside. Markup with no paragraph in it (a heading, a cell of
+a row) is then 16px shorter than what it holds, and the next thing lands on top of it:
+that was a rule through the descenders of every title. `ledger.css` zeroes it for
+headings and rows; a new keyed row container needs the same.
+
+**On a phone Streamlit stacks every column to full width**, so one entry became seven
+lines with its amount on the third. Each kind of row is laid out by its column's place
+in the row, under the `khata-rows-entry` / `-spend` / `-clear` / `-charge` / `-line` container keys.
+Adding or reordering a column in a row means changing that grid as well.
+
+**`ui.ruled_table` replaced `st.dataframe` wherever a person reads a table.** A dataframe
+is drawn on a canvas: it cannot take the page's type and scrolls sideways on a phone with
+the figures out of sight. The cost is its click-to-sort and CSV button. Every cell goes
+through `esc()` inside `table_html`, which is pure and tested.
+
+**To see what demo mode hides, number the rows.** Demo entries have `row=None`, so they
+never draw Edit, Delete or a tick box; a screenshot of demo mode says nothing about them.
+
 ### Attachments live in the sheet, not Drive
 
 A service account has no Drive storage quota, and sharing a folder with it does
@@ -374,9 +409,12 @@ matching rows: reading the whole tab would pull every stored file to serve one.
 
 Secrets are Streamlit's encrypted store (`.streamlit/secrets.toml` locally,
 gitignored). `ledger/ui.py::home_button()` is drawn by the router, so it is on every page
-and no page can forget it. It sits **below** Streamlit's own header rather than
-in it: that header is opaque at `z-index: 999990`, so the first version was on
-the page, correctly positioned, and invisible. Clicking it drops the cached
+and no page can forget it. It sits **in the strip above the page**, beside the sidebar,
+so it can never lie on top of a row while the page scrolls under it. Its z-index matches
+Streamlit's opaque header (`999990`), which comes first in the DOM and so paints
+underneath, and stays one below the sidebar, which covers it when opened on a phone.
+It avoids the right-hand edge because Streamlit Cloud draws its own toolbar there.
+Clicking it drops the cached
 sheet read and `switch_page`s to the Ledger — fresh figures without reloading
 the *page*, which is the distinction that matters, because a browser refresh is
 the thing that used to end the session.

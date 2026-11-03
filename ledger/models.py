@@ -92,7 +92,7 @@ class Entry:
             raise EntryError("ledger is required")
         if self.amount_minor <= 0:
             # Direction carries the sign; a negative amount would double-negate.
-            raise EntryError("amount must be positive — use direction for the sign")
+            raise EntryError("amount must be positive. Use direction for the sign")
 
     @property
     def signed_minor(self) -> int:

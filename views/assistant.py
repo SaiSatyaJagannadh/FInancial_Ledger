@@ -23,7 +23,7 @@ demo_banner(result)
 
 st.title("Assistant")
 st.caption(
-    "Tell me what happened and I'll draft the entry — I ask when I'm unsure "
+    "Tell me what happened and I'll draft the entry. I ask when I'm unsure "
     "rather than guessing, and nothing is saved until you press Save. "
     "**Questions about the ledger are answered instantly**, by adding your "
     "sheet up rather than asking a model."
@@ -39,13 +39,13 @@ NO_KEY_NOTE = (
     "Open **Manage app → Settings → Secrets** and add this line "
     "**at the very top**, above `[gcp_service_account]`:\n\n"
     "```toml\nNVIDIA_API_KEY = \"nvapi-…\"\n```\n\n"
-    "It has to go above every `[section]` heading — in TOML a heading "
+    "It has to go above every `[section]` heading. In TOML a heading "
     "claims every line beneath it, so a key added at the bottom becomes "
     "part of that section instead of a setting on its own."
 )
 if not key:
     st.info(
-        "No API key configured, so I can't turn a sentence into an entry yet — "
+        "No API key configured, so I can't turn a sentence into an entry yet, "
         "but **questions about your ledger still work**. Those are added up "
         "from the sheet, not generated, so they need no model at all. Try "
         "*“who owes me the most?”*"
@@ -72,12 +72,12 @@ if "chat" not in st.session_state:
     st.session_state.chat = [
         {"role": "assistant",
          "text": "Two things I can do.\n\n"
-                 "**Add an entry** — say *“I gave 2500 to Ravi today for the UK "
+                 "**Add an entry.** Say *“I gave 2500 to Ravi today for the UK "
                  "ledger, by UPI”* and I'll work out the person, ledger, amount "
                  "and direction, and show it to you before anything is saved. If "
                  "I'm not sure I'll ask rather than guess, and I'll remember "
                  "instructions like *“put these all under one person”*.\n\n"
-                 "**Answer a question** — *“who owes me the most?”*, *“how much "
+                 "**Answer a question.** *“Who owes me the most?”*, *“how much "
                  "does Ravi owe me?”*, *“which ledgers are still open?”* Those "
                  "come back instantly, added up from the sheet rather than "
                  "written by a model, so the figures are exact.",
@@ -94,7 +94,7 @@ def respond(reply, source: str, via: str = BY_CHAT) -> None:
                 f"Check the {'figure' if len(reply.charges) == 1 else 'figures'}, "
                 f"then save.")
     elif reply.groupings:
-        text = "That reads as a **grouping**. Nothing moves in the ledger — only how the totals roll up."
+        text = "That reads as a **grouping**. Nothing moves in the ledger, only how the totals roll up."
     elif reply.answer:
         text = reply.answer
     elif reply.question:
@@ -126,7 +126,7 @@ def history() -> list[dict]:
     ]
 
 
-with st.expander("📄  Read a statement, spreadsheet or photo"):
+with st.expander("Read a statement, spreadsheet or photo", icon=":material/description:"):
     st.caption(
         "PDF, Excel, CSV or an image. A document is read as text, which is far "
         "more accurate than reading a picture of it. Large photos are shrunk "
@@ -144,11 +144,11 @@ with st.expander("📄  Read a statement, spreadsheet or photo"):
         if docs.suffix_of(upload.name) in docs.IMAGE_SUFFIXES:
             st.image(upload, width=320)
         else:
-            st.caption(f"{upload.name} · {len(upload.getvalue()) // 1024} KB")
+            st.caption(f"{upload.name}, {len(upload.getvalue()) // 1024} KB")
 
         if st.button("Read this", type="primary"):
             st.session_state.chat.append(
-                {"role": "user", "text": f"📄 {upload.name}", "drafts": [], "rejected": []}
+                {"role": "user", "text": upload.name, "drafts": [], "rejected": []}
             )
             with st.chat_message("assistant"), st.spinner(f"Reading {upload.name}…"):
                 try:
@@ -183,7 +183,7 @@ with st.expander("📄  Read a statement, spreadsheet or photo"):
                     respond(reply, f"**{upload.name}**", via=via)
                 except Exception as exc:  # noqa: BLE001 — nothing may reach the page
                     st.session_state.chat.append({
-                        "role": "assistant", "text": f"⚠️ {exc}",
+                        "role": "assistant", "text": str(exc),
                         "drafts": [], "rejected": [],
                     })
             st.rerun()
@@ -195,10 +195,10 @@ for index, turn in enumerate(st.session_state.chat):
         # Worth saying out loud which figures were added up and which were
         # written by a model. Only one of the two can be off by a digit.
         if turn.get("computed"):
-            st.caption("⚡ Added up from your sheet — no model involved.")
+            st.caption("Added up from your sheet, no model involved.")
 
         for problem in turn.get("rejected") or []:
-            st.warning(f"Skipped — {problem}")
+            st.warning(f"Skipped: {problem}")
 
         # Interest saves to its own tab. Kept in a separate list from `drafts`
         # so no code path can reach for the wrong one and put a charge in the
@@ -206,9 +206,9 @@ for index, turn in enumerate(st.session_state.chat):
         for slot, charge in enumerate(turn.get("charges") or []):
             with st.container(border=True):
                 detail, save = st.columns([4, 1])
-                rate = f" · at {charge.rate_percent:g}%" if charge.rate_percent else ""
+                rate = f", at {charge.rate_percent:g}%" if charge.rate_percent else ""
                 detail.markdown(
-                    f"**{charge.money()}** interest · **{charge.person}** · "
+                    f"**{charge.money()}** interest, **{charge.person}**, "
                     f"{charge.month_label}{rate}"
                     + (f"  \n_{charge.note}_" if charge.note else "")
                 )
@@ -234,7 +234,7 @@ for index, turn in enumerate(st.session_state.chat):
                             ]
                             st.session_state.chat.append({
                                 "role": "assistant",
-                                "text": f"✅ Recorded {charge.money()} interest for "
+                                "text": f"Recorded {charge.money()} interest for "
                                         f"**{charge.person}**, {charge.month_label}. "
                                         "It is on the Interest page, not the ledger.",
                                 "drafts": [], "rejected": [],
@@ -244,7 +244,7 @@ for index, turn in enumerate(st.session_state.chat):
         # A grouping is a draft like everything else here: it is shown, it can
         # be corrected, and only then can it be applied. Saving straight from
         # what the model read means a misheard name silently regroups somebody.
-        ON_OWN = "— on their own —"
+        ON_OWN = "On their own"
         for slot, (person, under) in enumerate(turn.get("groupings") or []):
             tweak = st.session_state.get(f"gtweak_{index}_{slot}")
             if tweak is not None:
@@ -256,7 +256,7 @@ for index, turn in enumerate(st.session_state.chat):
                     else f"**{person}** goes back to being on their own"
                 )
                 st.caption(
-                    "Draft — nothing has changed yet. Check the names, then apply. "
+                    "Draft. Nothing has changed yet. Check the names, then apply. "
                     "Only the totals roll up; no entry moves."
                 )
 
@@ -281,7 +281,7 @@ for index, turn in enumerate(st.session_state.chat):
 
                 discard, apply = st.columns([1, 1])
                 if discard.button("Discard", key=f"gdrop_{index}_{slot}",
-                                  width="stretch"):
+                                  type="tertiary", width="stretch"):
                     st.session_state.chat[index]["groupings"] = [
                         g for i, g in enumerate(turn["groupings"]) if i != slot
                     ]
@@ -298,9 +298,9 @@ for index, turn in enumerate(st.session_state.chat):
                         ]
                         st.session_state.chat.append({
                             "role": "assistant",
-                            "text": (f"✅ **{person}** now comes under **{under}**."
+                            "text": (f"**{person}** now comes under **{under}**."
                                      if under else
-                                     f"✅ **{person}** is on their own again."),
+                                     f"**{person}** is on their own again."),
                             "drafts": [], "rejected": [],
                         })
                         st.rerun()
@@ -346,15 +346,15 @@ for index, turn in enumerate(st.session_state.chat):
             tweak = st.session_state.get(f"tweak_{index}_{slot}")
             if tweak is not None:
                 entry = tweak
-            arrow = "→ out" if entry.signed_minor > 0 else "← back"
+            arrow = "out" if entry.signed_minor > 0 else "back"
             with st.container(border=True):
                 left, middle, right = st.columns([4, 1, 1])
                 with left:
                     st.markdown(
-                        f"**{format_money(entry.amount_minor, entry.currency)}** {arrow} · "
-                        f"**{entry.person}** · {entry.ledger}  \n"
+                        f"**{format_money(entry.amount_minor, entry.currency)}** {arrow}, "
+                        f"**{entry.person}**, {entry.ledger}  \n"
                         f"{entry.date:%d %b %Y}"
-                        + (f" · _{entry.note}_" if entry.note else "")
+                        + (f"  \n_{entry.note}_" if entry.note else "")
                     )
 
                 with st.expander("Change something before saving"):
@@ -392,7 +392,7 @@ for index, turn in enumerate(st.session_state.chat):
                             st.rerun()
 
                 with middle:
-                    if st.button("Discard", key=f"drop_{index}_{slot}"):
+                    if st.button("Discard", key=f"drop_{index}_{slot}", type="tertiary"):
                         st.session_state.chat[index]["drafts"] = [
                             d for i, d in enumerate(turn["drafts"]) if i != slot
                         ]
@@ -410,7 +410,7 @@ for index, turn in enumerate(st.session_state.chat):
                             ]
                             st.session_state.chat.append({
                                 "role": "assistant",
-                                "text": f"✅ Saved **{format_money(entry.amount_minor, entry.currency)}** "
+                                "text": f"Saved **{format_money(entry.amount_minor, entry.currency)}** "
                                         f"for **{entry.person}** on *{entry.ledger}*. "
                                         "It's on the dashboard now.",
                                 "drafts": [], "rejected": [],
@@ -450,7 +450,7 @@ def ask(text: str) -> None:
         )
     except Exception as exc:  # noqa: BLE001 — nothing may reach the page
         st.session_state.chat.append({
-            "role": "assistant", "text": f"⚠️ {exc}",
+            "role": "assistant", "text": str(exc),
             "drafts": [], "rejected": [], "failed": text,
         })
     else:
@@ -481,7 +481,7 @@ if last.get("failed"):
         with st.chat_message("assistant"), st.spinner("Trying again…"):
             ask(text)
         st.rerun()
-    drop.caption("Nothing was saved. Your message is kept — press to send it again.")
+    drop.caption("Nothing was saved. Your message is kept, so press to send it again.")
 
 if len(st.session_state.chat) > 1 and st.button("Clear chat"):
     del st.session_state.chat
