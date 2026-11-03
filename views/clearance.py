@@ -21,7 +21,7 @@ from ledger.models import BY_HAND, EntryError
 from ledger.money import Currency, format_money, spoken, to_minor
 from ledger.ui import (
     attachment_button, attachment_field, attachment_is_stored, demo_banner, esc,
-    load_ledger, safe_href, styles,
+    esc_line, load_ledger, md_plain, safe_href, styles,
 )
 
 NEW = "New…"
@@ -74,7 +74,7 @@ def edit_dialog(c: clearance.Clearance) -> None:
         st.error(str(exc))
 
     if edited is not None and edited.under != c.under:
-        st.info(f"This will move the record from **{c.under}** to **{edited.under}**.")
+        st.info(f"This will move the record from **{md_plain(c.under)}** to **{md_plain(edited.under)}**.")
 
     stored = f"cl_stored_{c.row}"
     save, cancel = st.columns(2)
@@ -305,7 +305,7 @@ for bucket in groups:
         key=lambda c: (c.date, c.row or 0), reverse=True,
     )
     with st.expander(
-        f"{bucket['under']} — {format_money(bucket['total_minor'], currency)} · "
+        f"{md_plain(bucket['under'])} — {format_money(bucket['total_minor'], currency)} · "
         f"{bucket['count']} record{'s' if bucket['count'] != 1 else ''}",
         expanded=(len(groups) == 1),
     ):
@@ -329,7 +329,7 @@ for bucket in groups:
                     f'<div class="khata-cell">{esc(c.payer)}</div>', unsafe_allow_html=True
                 )
                 note_col.markdown(
-                    f'<div class="khata-cell khata-meta">{esc(c.note)}</div>',
+                    f'<div class="khata-cell khata-meta">{esc_line(c.note)}</div>',
                     unsafe_allow_html=True,
                 )
                 with file_col:
@@ -341,7 +341,7 @@ for bucket in groups:
                         href = safe_href(c.attachment)
                         st.markdown(
                             f'<div class="khata-cell khata-meta">'
-                            f'<a href="{href}" target="_blank">Attachment link</a></div>'
+                            f'<a href="{esc(href)}" target="_blank" rel="noopener noreferrer">Attachment link</a></div>'
                             if href else
                             '<div class="khata-cell khata-meta">Link removed</div>',
                             unsafe_allow_html=True,

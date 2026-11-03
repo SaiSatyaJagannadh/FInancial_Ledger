@@ -149,7 +149,8 @@ class Charge:
             amount = to_minor(row["amount"])
         except ValueError as exc:
             raise EntryError(str(exc)) from exc
-        paid_text = str(row.get("paid") or "").strip()
+        raw_paid = row.get("paid")  # a numeric 0 is a saved 0, not a missing cell
+        paid_text = "" if raw_paid in ("", None) else str(raw_paid).strip()
         try:
             paid = to_minor(paid_text) if paid_text else None
         except ValueError as exc:
@@ -326,7 +327,14 @@ def set_for_month(person: str, when: date, amount_minor: int, *,
     from ledger import store
 
     secrets = store._secrets() if secrets is None else secrets
-    existing = for_month(load(secrets)[0], when, currency).get(person)
+    charges, problems = load(secrets)
+    if any(p.startswith("Could not reach") for p in problems):
+        raise RuntimeError("Could not read the interest tab, so nothing was saved. Try again.")
+    existing = for_month(charges, when, currency).get(person)
+    if existing is not None:  # the form does not carry these; a replace must not blank them
+        moved_to = moved_to or existing.moved_to
+        attachment = attachment or existing.attachment
+        rate_percent = rate_percent or existing.rate_percent
 
     if amount_minor <= 0:
         if existing is None:
@@ -403,7 +411,7 @@ def trail_note(charge: Charge, person: str, note: str = "") -> str:
 
 
 def find_ledger_entry(entries: list, charge: Charge, person: str,
-                      ledger: str):
+                      ledger: str | None):
     """The ledger row already standing for this charge, if there is one.
 
     Without this, saving the same interest twice appended a second identical
@@ -418,6 +426,9 @@ def find_ledger_entry(entries: list, charge: Charge, person: str,
     the interest figure. A real entry disappeared that way: the row still read
     "given", but for the interest amount, and the money actually lent was gone.
 
+    `ledger=None` means "on any ledger": the row is found by its trail, and a
+    different ledger is then a correction to it rather than a reason to miss it.
+
     The reason typed after the trail is ignored: a person is free to reword it
     between saves, and `trail_note` always writes the trail first.
     """
@@ -429,7 +440,7 @@ def find_ledger_entry(entries: list, charge: Charge, person: str,
             e for e in entries
             if e.note.startswith(trail)
             and e.person == person.strip()
-            and e.ledger == (ledger.strip() or "Interest")
+            and (ledger is None or e.ledger == (ledger.strip() or "Interest"))
             and e.currency is charge.currency
             and e.direction is Direction.given
         ),
@@ -438,21 +449,37 @@ def find_ledger_entry(entries: list, charge: Charge, person: str,
 
 
 def sync_ledger_entry(entries: list, charge: Charge, person: str, ledger: str,
-                      note: str = "") -> str:
+                      note: str = "", was_moved_to: str = "") -> str:
     """Write, or correct, the single ledger row for interest handed on.
 
     Both places that cross from interest to the ledger come through here, so
     the "is one already standing?" question is asked once and answered the same
     way. Returns what it did.
+
+    The standing row is found by its trail on any ledger, and under the
+    previous taker (`was_moved_to`) when the taker has changed; a differing
+    person, ledger or amount corrects it rather than adding a second loan.
+    If `was_moved_to` says a row should exist and none is found, this refuses
+    instead of appending: a missing row is a question for the owner, and a
+    second loan is the answer that cannot be undone quietly.
     """
     from ledger import store
 
     fresh = ledger_entry(charge, person, ledger=ledger, note=note)
-    standing = find_ledger_entry(entries, charge, person, ledger)
+    standing = find_ledger_entry(entries, charge, person, None)
+    if standing is None and was_moved_to and was_moved_to.strip() != person.strip():
+        standing = find_ledger_entry(entries, charge, was_moved_to, None)
     if standing is None:
+        if was_moved_to:
+            raise RuntimeError(
+                f"This charge was handed on to {was_moved_to}, but its ledger "
+                "row was not found, so nothing was written. Check the ledger "
+                "before saving again."
+            )
         store.append(fresh)
         return "added"
-    if standing.amount_minor != fresh.amount_minor:
+    if (standing.amount_minor, standing.person, standing.ledger) != \
+            (fresh.amount_minor, fresh.person, fresh.ledger):
         store.update(standing, fresh)
         return "updated"
     return "unchanged"

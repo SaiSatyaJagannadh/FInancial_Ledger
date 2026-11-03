@@ -11,10 +11,12 @@ import streamlit as st
 from ledger import docs, facts, interest, people as grouping, store
 from dataclasses import replace
 
-from ledger.assistant import read_image, read_note, summarise
+from ledger.assistant import (
+    MAX_MESSAGE_CHARS, read_image, read_note, spend_model_call, summarise,
+)
 from ledger.models import BY_CHAT, BY_IMAGE, Direction, EntryError
 from ledger.money import format_money, to_minor
-from ledger.ui import api_key, clear_cache, demo_banner, load_ledger, styles
+from ledger.ui import api_key, clear_cache, demo_banner, load_ledger, md_plain, styles
 
 styles()
 
@@ -107,9 +109,21 @@ def respond(reply, source: str, via: str = BY_CHAT) -> None:
     else:
         text = (f"I couldn't make an entry out of {source}. "
                 "Tell me who it involves and how much.")
+    # Every draft and grouping gets an id that is never reused, and every
+    # widget and tweak is keyed by it. Keyed by list position, saving the first
+    # of two drafts left its widgets and tweaks behind to be written over the
+    # one that moved up into its slot.
+    st.session_state.setdefault("assistant_uid", 0)
+
+    def fresh_ids(n: int) -> list[int]:
+        first = st.session_state.assistant_uid
+        st.session_state.assistant_uid += n
+        return list(range(first, first + n))
+
     st.session_state.chat.append({
         "role": "assistant", "text": text, "drafts": drafts,
-        "rejected": rejected, "via": via,
+        "rejected": rejected, "via": via, "uid": fresh_ids(1)[0],
+        "ids": fresh_ids(len(drafts)), "gids": fresh_ids(len(reply.groupings)),
         "charges": list(reply.charges), "groupings": list(reply.groupings),
     })
 
@@ -129,8 +143,8 @@ def history() -> list[dict]:
 with st.expander("Read a statement, spreadsheet or photo", icon=":material/description:"):
     st.caption(
         "PDF, Excel, CSV or an image. A document is read as text, which is far "
-        "more accurate than reading a picture of it. Large photos are shrunk "
-        "automatically rather than refused."
+        "more accurate than reading a picture of it. Files over 10 MB are "
+        "refused."
     )
     upload = st.file_uploader(
         "Bank statement, UPI receipt, spreadsheet, photo of a note",
@@ -144,7 +158,7 @@ with st.expander("Read a statement, spreadsheet or photo", icon=":material/descr
         if docs.suffix_of(upload.name) in docs.IMAGE_SUFFIXES:
             st.image(upload, width=320)
         else:
-            st.caption(f"{upload.name}, {len(upload.getvalue()) // 1024} KB")
+            st.caption(f"{md_plain(upload.name)}, {len(upload.getvalue()) // 1024} KB")
 
         if st.button("Read this", type="primary"):
             st.session_state.chat.append(
@@ -189,8 +203,9 @@ with st.expander("Read a statement, spreadsheet or photo", icon=":material/descr
             st.rerun()
 
 for index, turn in enumerate(st.session_state.chat):
+    tid = turn.get("uid", index)
     with st.chat_message(turn["role"]):
-        st.markdown(turn["text"])
+        st.markdown(md_plain(turn["text"]))
 
         # Worth saying out loud which figures were added up and which were
         # written by a model. Only one of the two can be off by a digit.
@@ -246,7 +261,8 @@ for index, turn in enumerate(st.session_state.chat):
         # what the model read means a misheard name silently regroups somebody.
         ON_OWN = "On their own"
         for slot, (person, under) in enumerate(turn.get("groupings") or []):
-            tweak = st.session_state.get(f"gtweak_{index}_{slot}")
+            did = turn["gids"][slot]
+            tweak = st.session_state.get(f"gtweak_{tid}_{did}")
             if tweak is not None:
                 person, under = tweak
 
@@ -265,28 +281,30 @@ for index, turn in enumerate(st.session_state.chat):
                     fixed_person = who_col.selectbox(
                         "Person", people,
                         index=people.index(person) if person in people else 0,
-                        key=f"gp_{index}_{slot}",
+                        key=f"gp_{tid}_{did}",
                     )
                     options = [ON_OWN, *[p for p in people if p != fixed_person]]
                     current = under if under in options else ON_OWN
                     fixed_under = under_col.selectbox(
                         "Comes under", options,
                         index=options.index(current),
-                        key=f"gu_{index}_{slot}",
+                        key=f"gu_{tid}_{did}",
                     )
                     chosen = (fixed_person, "" if fixed_under == ON_OWN else fixed_under)
                     if chosen != (person, under):
-                        st.session_state[f"gtweak_{index}_{slot}"] = chosen
+                        st.session_state[f"gtweak_{tid}_{did}"] = chosen
                         st.rerun()
 
                 discard, apply = st.columns([1, 1])
-                if discard.button("Discard", key=f"gdrop_{index}_{slot}",
+                if discard.button("Discard", key=f"gdrop_{tid}_{did}",
                                   type="tertiary", width="stretch"):
                     st.session_state.chat[index]["groupings"] = [
                         g for i, g in enumerate(turn["groupings"]) if i != slot
                     ]
+                    st.session_state.chat[index]["gids"].pop(slot)
+                    st.session_state.pop(f"gtweak_{tid}_{did}", None)
                     st.rerun()
-                if apply.button("Apply", key=f"gsave_{index}_{slot}", type="primary",
+                if apply.button("Apply", key=f"gsave_{tid}_{did}", type="primary",
                                 width="stretch"):
                     try:
                         grouping.set_parent(person, under)
@@ -296,6 +314,8 @@ for index, turn in enumerate(st.session_state.chat):
                         st.session_state.chat[index]["groupings"] = [
                             g for i, g in enumerate(turn["groupings"]) if i != slot
                         ]
+                        st.session_state.chat[index]["gids"].pop(slot)
+                        st.session_state.pop(f"gtweak_{tid}_{did}", None)
                         st.session_state.chat.append({
                             "role": "assistant",
                             "text": (f"**{person}** now comes under **{under}**."
@@ -314,17 +334,17 @@ for index, turn in enumerate(st.session_state.chat):
                 st.markdown("**File all of these under one person?**")
                 who_col, book_col, go_col = st.columns([2, 2, 1])
                 bulk_person = who_col.selectbox(
-                    "Person", ["Leave as proposed", *people], key=f"bp_{index}",
+                    "Person", ["Leave as proposed", *people], key=f"bp_{tid}",
                     label_visibility="collapsed",
                 )
                 bulk_ledger = book_col.selectbox(
-                    "Ledger", ["Leave as proposed", *ledgers], key=f"bl_{index}",
+                    "Ledger", ["Leave as proposed", *ledgers], key=f"bl_{tid}",
                     label_visibility="collapsed",
                 )
-                if go_col.button("Apply", key=f"ba_{index}"):
+                if go_col.button("Apply", key=f"ba_{tid}"):
                     for slot in range(len(pending)):
                         current = st.session_state.get(
-                            f"tweak_{index}_{slot}", pending[slot].entry
+                            f"tweak_{tid}_{turn['ids'][slot]}", pending[slot].entry
                         )
                         changes = {}
                         if bulk_person != "Leave as proposed":
@@ -332,7 +352,7 @@ for index, turn in enumerate(st.session_state.chat):
                         if bulk_ledger != "Leave as proposed":
                             changes["ledger"] = bulk_ledger
                         if changes:
-                            st.session_state[f"tweak_{index}_{slot}"] = replace(
+                            st.session_state[f"tweak_{tid}_{turn['ids'][slot]}"] = replace(
                                 current, **changes
                             )
                     st.rerun()
@@ -342,8 +362,9 @@ for index, turn in enumerate(st.session_state.chat):
                 )
 
         for slot, draft in enumerate(turn.get("drafts") or []):
+            did = turn["ids"][slot]
             entry = draft.entry
-            tweak = st.session_state.get(f"tweak_{index}_{slot}")
+            tweak = st.session_state.get(f"tweak_{tid}_{did}")
             if tweak is not None:
                 entry = tweak
             arrow = "out" if entry.signed_minor > 0 else "back"
@@ -360,23 +381,23 @@ for index, turn in enumerate(st.session_state.chat):
                 with st.expander("Change something before saving"):
                     fix_who, fix_book = st.columns(2)
                     new_person = fix_who.text_input(
-                        "Person", value=entry.person, key=f"p_{index}_{slot}")
+                        "Person", value=entry.person, key=f"p_{tid}_{did}")
                     new_ledger = fix_book.text_input(
-                        "Ledger", value=entry.ledger, key=f"l_{index}_{slot}")
+                        "Ledger", value=entry.ledger, key=f"l_{tid}_{did}")
                     fix_when, fix_dir, fix_amt = st.columns([1.2, 1.3, 1.2])
                     new_date = fix_when.date_input(
-                        "Date", value=entry.date, format="DD/MM/YYYY", key=f"d_{index}_{slot}")
+                        "Date", value=entry.date, format="DD/MM/YYYY", key=f"d_{tid}_{did}")
                     new_dir = fix_dir.radio(
                         "Direction", list(Direction),
                         index=list(Direction).index(entry.direction),
                         format_func=lambda d: "I gave them" if d is Direction.given
                         else "They gave me back",
-                        key=f"dir_{index}_{slot}")
+                        key=f"dir_{tid}_{did}")
                     new_amount = fix_amt.text_input(
                         f"Amount ({entry.currency.symbol})",
-                        value=f"{entry.amount_minor / 100:.2f}", key=f"a_{index}_{slot}")
+                        value=f"{entry.amount_minor / 100:.2f}", key=f"a_{tid}_{did}")
                     new_note = st.text_input(
-                        "Note", value=entry.note, key=f"n_{index}_{slot}")
+                        "Note", value=entry.note, key=f"n_{tid}_{did}")
 
                     try:
                         fixed = replace(
@@ -388,17 +409,19 @@ for index, turn in enumerate(st.session_state.chat):
                         st.error(str(exc))
                     else:
                         if fixed.to_row() != entry.to_row():
-                            st.session_state[f"tweak_{index}_{slot}"] = fixed
+                            st.session_state[f"tweak_{tid}_{did}"] = fixed
                             st.rerun()
 
                 with middle:
-                    if st.button("Discard", key=f"drop_{index}_{slot}", type="tertiary"):
+                    if st.button("Discard", key=f"drop_{tid}_{did}", type="tertiary"):
                         st.session_state.chat[index]["drafts"] = [
                             d for i, d in enumerate(turn["drafts"]) if i != slot
                         ]
+                        st.session_state.chat[index]["ids"].pop(slot)
+                        st.session_state.pop(f"tweak_{tid}_{did}", None)
                         st.rerun()
                 with right:
-                    if st.button("Save", key=f"save_{index}_{slot}", type="primary"):
+                    if st.button("Save", key=f"save_{tid}_{did}", type="primary"):
                         try:
                             store.append(replace(entry, source=turn.get("via", BY_CHAT)))
                         except Exception as exc:  # noqa: BLE001 — surface what the sheet said
@@ -408,6 +431,8 @@ for index, turn in enumerate(st.session_state.chat):
                             st.session_state.chat[index]["drafts"] = [
                                 d for i, d in enumerate(turn["drafts"]) if i != slot
                             ]
+                            st.session_state.chat[index]["ids"].pop(slot)
+                            st.session_state.pop(f"tweak_{tid}_{did}", None)
                             st.session_state.chat.append({
                                 "role": "assistant",
                                 "text": f"Saved **{format_money(entry.amount_minor, entry.currency)}** "
@@ -442,6 +467,13 @@ def ask(text: str) -> None:
         })
         return
 
+    refused = spend_model_call(st.session_state, text)
+    if refused:
+        st.session_state.chat.append({
+            "role": "assistant", "text": refused, "drafts": [], "rejected": [],
+        })
+        return
+
     try:
         reply = read_note(
             history(), api_key=key, people=people, ledgers=ledgers,
@@ -457,7 +489,8 @@ def ask(text: str) -> None:
         respond(reply, "that")
 
 
-message = st.chat_input("e.g. I gave 2500 to Ravi today for the UK ledger, by UPI")
+message = st.chat_input("e.g. I gave 2500 to Ravi today for the UK ledger, by UPI",
+                         max_chars=MAX_MESSAGE_CHARS)
 if message:
     st.session_state.chat.append(
         {"role": "user", "text": message, "drafts": [], "rejected": []}

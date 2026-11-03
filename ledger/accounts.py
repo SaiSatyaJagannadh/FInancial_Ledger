@@ -24,6 +24,8 @@ import hashlib
 import hmac
 import os
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -239,8 +241,66 @@ def _announce(kind: str, action: str, *, before=None, after=None,
         pass
 
 
+# ------------------------------------------------------------- guess budget
+#
+# Process-wide, so a new browser session cannot reset it. A growing wait rather
+# than a lock: a stranger typing the owner's address must not be able to lock
+# the owner out for good, only make them wait a little. Attempts made *during*
+# a wait are refused and not counted, so spamming does not extend it.
+# ponytail: in memory, so a restart forgets it and each worker has its own;
+# move it to the sheet only if the app ever runs several processes.
+
+FREE_GUESSES = 5
+# ponytail: a minute, not longer, so a stranger failing as somebody cannot keep them out.
+# Guessing stays about one try a minute per address; per-client limits if that is too many.
+MAX_WAIT = 60.0
+SIGNUP_WORD = "\0signup-word"
+_FAILS: dict[str, tuple[int, float]] = {}      # key -> (failures, wait until)
+_FAILS_LOCK = threading.Lock()
+_clock = time.monotonic
+
+
+def _wait_left(key: str) -> float:
+    with _FAILS_LOCK:
+        return max(0.0, _FAILS.get(key, (0, 0.0))[1] - _clock())
+
+
+def _note(key: str, ok: bool) -> None:
+    with _FAILS_LOCK:
+        if ok:
+            _FAILS.pop(key, None)
+            return
+        if len(_FAILS) > 10_000:               # bound memory under address spraying
+            _FAILS.clear()
+        n = _FAILS.get(key, (0, 0.0))[0] + 1
+        over = n - FREE_GUESSES
+        _FAILS[key] = (n, _clock() + (min(MAX_WAIT, 2.0 ** over) if over > 0 else 0.0))
+
+
+def check_signup_word(given: str, wanted: str) -> bool:
+    """Is the quoted sign-up word right? Throttled; constant-time on bytes."""
+    if not wanted:
+        return True
+    if _wait_left(SIGNUP_WORD):
+        return False
+    ok = hmac.compare_digest(str(given).strip().encode(), str(wanted).encode())
+    _note(SIGNUP_WORD, ok)
+    return ok
+
+
+_DECOY: list[str] = []
+
+
+def _decoy() -> str:
+    """A real hash computed once, so an unknown address costs one PBKDF2 run
+    (the verify), the same as a known one, not two."""
+    if not _DECOY:
+        _DECOY.append(hash_password("x" * MIN_PASSWORD))
+    return _DECOY[0]
+
+
 def authenticate(email: str, password: str,
-                 secrets: dict | None = None) -> Account | None:
+                 secrets: dict | None = None, client: str = "") -> Account | None:
     """The account if the password is right, otherwise None.
 
     Deliberately gives the caller nothing to distinguish "no such address" from
@@ -248,13 +308,23 @@ def authenticate(email: str, password: str,
     an account here. An unknown address still costs a hash, so the two answers
     take the same time as well as saying the same thing.
     """
+    # The wait is per address *and client*, so one client's failures slow only
+    # that client. `client` is passed in (no Streamlit import here).
+    # ponytail: with no client IP this is the address alone, and a stranger
+    # failing as the owner once a minute can again keep them out; needs an IP.
+    key = str(email or "").strip().lower() + "|" + str(client or "")
+    if _wait_left(key):             # before any hash, so spraying costs nothing
+        return None
     accounts, _ = load(secrets)
     account = find(email, accounts)
     if account is None:
         # Burn the same work rather than returning early and timing differently.
-        verify(password, hash_password("x" * MIN_PASSWORD))
+        verify(password, _decoy())
+        _note(key, False)
         return None
-    return account if verify(password, account.password_hash) else None
+    ok = verify(password, account.password_hash)
+    _note(key, ok)
+    return account if ok else None
 
 
 def set_password(email: str, password: str, secrets: dict | None = None) -> Account:

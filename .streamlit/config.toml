@@ -48,4 +48,5 @@ secondaryBackgroundColor = "#FFFDF9"
 toolbarMode = "minimal"
 
 [server]
-maxUploadSize = 25
+# Phone photos are shrunk by ledger/docs.py; stored attachments keep their own 2 MB cap.
+maxUploadSize = 10

@@ -22,7 +22,9 @@ from ledger.compute import (
 from ledger import interest, people as grouping, settle, store
 from ledger.models import Entry
 from ledger.money import Currency, compact, format_money
-from ledger.ui import clear_cache, demo_banner, entry_table, load_ledger, ruled_table, styles
+from ledger.ui import (
+    clear_cache, demo_banner, entry_table, load_ledger, md_plain, ruled_table, styles,
+)
 
 styles()
 
@@ -245,7 +247,7 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
             short = compact(g.net_minor, currency)
             title = g.head + (f" + {len(g.people) - 1}" if g.grouped else "")
             with st.expander(
-                f"{title}: {money(g.net_minor)}"
+                f"{md_plain(title)}: {money(g.net_minor)}"
                 + (f" ({short})" if short else "")
                 + f", {len(theirs)} entr{'y' if len(theirs) == 1 else 'ies'}"
             ):
@@ -262,7 +264,7 @@ def render(entries: list[Entry], currency: Currency, key: str) -> None:
                     st.divider()
                 for person in ([g.head] if not g.grouped else sorted(g.people)):
                     if g.grouped:
-                        st.markdown(f"**{person}**")
+                        st.markdown(f"**{md_plain(person)}**")
                     _settle_control(person, entries, currency, key)
                 entry_table(theirs, scope=f"{key}_{g.head}")
 

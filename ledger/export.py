@@ -172,6 +172,13 @@ def to_excel(entries: list[Entry], parents: dict | None = None) -> bytes:
             for index, width in enumerate([22, 30, 14, 14, 14, 14], start=1):
                 tab.column_dimensions[get_column_letter(index)].width = width
 
+    # Text that starts with "=" is stored by openpyxl as a live formula.
+    for ws in book.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.data_type == "f":
+                    cell.data_type = "s"
+
     buffer = io.BytesIO()
     book.save(buffer)
     return buffer.getvalue()

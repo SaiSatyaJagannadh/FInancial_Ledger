@@ -76,13 +76,22 @@ def allowed_emails(secrets: dict | None = None) -> list[str] | None:
         return None
     if raw is None:
         return []                       # not set at all: unrestricted, and said so
+    if isinstance(raw, dict):
+        return None
+    blank_is_unreadable = isinstance(raw, str)
     if isinstance(raw, str):
         raw = [part.strip() for part in raw.replace(",", " ").split()]
     try:
         items = list(raw)               # a number, a bool, anything not iterable
     except TypeError:
         return None
-    return [str(item).strip().lower() for item in items if str(item).strip()]
+    kept = [str(item).strip().lower() for item in items if str(item).strip()]
+    # A value that was written but says nobody ("", [""], [" "]) is a list the
+    # owner meant and this code cannot honour: lock, do not open. Only an
+    # absent key or an explicit `[]` means unrestricted.
+    if not kept and (blank_is_unreadable or items):
+        return None
+    return kept
 
 
 def permitted(email: str, secrets: dict | None = None) -> bool:
@@ -182,8 +191,26 @@ def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
+def claim_for(email: str, password_hash: str, key: bytes) -> str:
+    """A keyed digest of the account's *current* password hash.
+
+    Carried in the token, so a password change (new hash) or a removed row
+    (no hash) makes every token issued before it fail the check in `_restore`.
+    """
+    return hmac.new(key, f"claim\0{email}\0{password_hash}".encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def token_claim(token: str) -> str:
+    """The claim inside a token. Only meaningful after `read_token` accepted it."""
+    try:
+        return str(json.loads(_unb64(str(token).split(".")[1])).get("c") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def make_token(email: str, name: str, key: bytes, *, now: float | None = None,
-               days: int = REMEMBER_DAYS) -> str:
+               days: int = REMEMBER_DAYS, claim: str = "") -> str:
     """A signed "this browser is <email>" note, good until it expires.
 
     The payload is readable by anybody holding the cookie — it is their own
@@ -194,7 +221,7 @@ def make_token(email: str, name: str, key: bytes, *, now: float | None = None,
         return ""
     now = time.time() if now is None else now
     body = _b64(json.dumps(
-        {"e": email, "n": name, "x": int(now + days * 86400)},
+        {"e": email, "n": name, "x": int(now + days * 86400), "c": claim},
         separators=(",", ":"),
     ).encode())
     return f"v1.{body}.{_b64(hmac.new(key, body.encode(), hashlib.sha256).digest())}"
@@ -257,6 +284,32 @@ def _write_cookie(value: str, seconds: int) -> None:
     components.html(_cookie_script(value, seconds), height=1)
 
 
+def _still_valid(email: str, claim: str, key: bytes) -> bool:
+    """Does the token's claim match the account's current password hash?
+
+    One users-tab read, made only when a *new* session is being restored (never
+    per rerun, so `signed_in_email` stays session-only). A token with no claim
+    predates this check and is refused once. A clean read that finds no row, or
+    a different hash, refuses. A read that fails keeps the person signed in:
+    a Google 503 must not sign anybody out.
+    ponytail: while the tab is unreadable a revoked token still restores;
+    that window is as long as the outage.
+    """
+    from ledger import accounts
+
+    if not claim:
+        return False
+    try:
+        known, problems = accounts.load()
+    except Exception:  # noqa: BLE001
+        return True
+    if not known and problems:          # load() reports a failed read this way
+        return True
+    account = accounts.find(email, known)
+    return bool(account) and hmac.compare_digest(
+        claim, claim_for(account.email, account.password_hash, key))
+
+
 def _restore() -> None:
     """Put a remembered sign-in back into this session, once per session.
 
@@ -274,7 +327,10 @@ def _restore() -> None:
         token = str(st.context.cookies.get(COOKIE) or "")
     except Exception:  # noqa: BLE001 — no runtime, no cookies
         return
-    email, name = read_token(token, _remember_key())
+    key = _remember_key()
+    email, name = read_token(token, key)
+    if email and not _still_valid(email, token_claim(token), key):
+        email = ""
     if email:
         st.session_state[SESSION] = email
         st.session_state[SESSION_NAME] = name or email
@@ -301,7 +357,8 @@ def signed_in_email() -> str:
     already trusted: this key is only ever set by a verified sign-in.
 
     The cost is that removing somebody from the sheet does not end a session
-    they already have. It ends when their browser tab does.
+    they already hold. It ends with the browser tab, and a remembered sign-in is
+    checked against the password hash once, when a new session is restored.
     """
     return str(st.session_state.get(SESSION) or "")
 
@@ -501,7 +558,11 @@ def _password_gate() -> None:
             submitted = st.form_submit_button("Sign in", type="primary",
                                               width="stretch")
         if submitted:
-            account = accounts.authenticate(email, password)
+            try:
+                client = st.context.ip_address or ""
+            except Exception:
+                client = ""
+            account = accounts.authenticate(email, password, client=client)
             if account is None:
                 # One message for both causes. Saying which was wrong tells a
                 # stranger whether an address has an account here.
@@ -514,7 +575,9 @@ def _password_gate() -> None:
                 # Written to the browser on the next run — `st.rerun()` throws
                 # away whatever this one has drawn, the script included.
                 st.session_state[_PENDING] = make_token(
-                    account.email, account.name or account.email, _remember_key()
+                    account.email, account.name or account.email, _remember_key(),
+                    claim=claim_for(account.email, account.password_hash,
+                                    _remember_key()),
                 )
                 st.rerun()
 
@@ -541,7 +604,7 @@ def _password_gate() -> None:
 
         if registering:
             wrong = accounts.validate(name, new_email, new_password, confirm)
-            if code_wanted and code_given.strip() != code_wanted:
+            if code_wanted and not accounts.check_signup_word(code_given, code_wanted):
                 wrong.append("That sign-up code is not right.")
             for problem in wrong:
                 st.error(problem)
@@ -577,6 +640,9 @@ def _password_gate() -> None:
 #: Where a pending reset lives while somebody goes to read their email. Session
 #: state, so the code never touches the sheet and dies with the browser tab.
 _RESET = "reset_pending"
+
+
+_RESET_KEY = "\0reset:"      # accounts' process-wide wait table, one slot per address
 
 
 def _reset_form(known: list) -> None:
@@ -616,29 +682,34 @@ def _reset_form(known: list) -> None:
                 width="stretch",
             )
         if asked:
+            address = str(email or "").strip().lower()
+            key = _RESET_KEY + address
             account = accounts.find(email, known)
-            if account is None:
-                # Same non-answer as a failed sign-in: saying "no such account"
-                # tells a stranger who is registered here.
-                st.success(
-                    "If that address has an account, a code is on its way to it."
-                    if can_email else
-                    "If that address has an account, you can set a new password now."
-                )
-            else:
-                code = accounts.reset_code()
-                problem = accounts.send_reset_code(account, code) if can_email else ""
-                if problem:
-                    st.error(f"Could not send the code: {problem}")
-                else:
-                    st.session_state[_RESET] = {
-                        "email": account.email,
-                        "code": code,
-                        "until": (datetime.now()
-                                  + timedelta(minutes=accounts.RESET_MINUTES)).isoformat(),
-                        "left": accounts.RESET_ATTEMPTS,
-                    }
-                    st.rerun()
+            if accounts._wait_left(key):
+                # Per address and per process, so a new browser session does not
+                # reset it; the same answer whether or not the address exists.
+                st.error("Too many requests for that address. Try again later.")
+                return
+            accounts._note(key, False)
+            code = accounts.reset_code()
+            problem = ""
+            if account is not None and can_email:
+                problem = accounts.send_reset_code(account, code)
+            if problem:
+                st.error("Could not send the code. Try again later.")
+            elif address:
+                # An unknown address gets the same next screen as a real one,
+                # with a code nobody holds, so the screen says nothing about
+                # who has an account.
+                st.session_state[_RESET] = {
+                    "email": address,
+                    "code": code,
+                    "real": account is not None,
+                    "until": (datetime.now()
+                              + timedelta(minutes=accounts.RESET_MINUTES)).isoformat(),
+                    "left": accounts.RESET_ATTEMPTS,
+                }
+                st.rerun()
         return
 
     if datetime.now() > datetime.fromisoformat(pending["until"]):
@@ -665,8 +736,12 @@ def _reset_form(known: list) -> None:
         st.session_state.pop(_RESET, None)
         st.rerun()
     if changing:
-        wanted = pending["code"] if can_email else code_wanted
-        if not compare_digest(str(given).strip(), str(wanted)):
+        wanted = pending["code"] if can_email or not pending.get("real") else code_wanted
+        key = _RESET_KEY + pending["email"]
+        if accounts._wait_left(key):
+            st.error("Too many wrong codes for that address. Try again later.")
+        elif not compare_digest(str(given).strip(), str(wanted)):
+            accounts._note(key, False)
             pending["left"] -= 1
             if pending["left"] <= 0:
                 st.session_state.pop(_RESET, None)
@@ -678,6 +753,7 @@ def _reset_form(known: list) -> None:
             st.error("The two passwords do not match.")
         else:
             try:
+                accounts._note(key, True)
                 accounts.set_password(pending["email"], new)
             except (EntryError, RuntimeError) as exc:
                 st.error(str(exc))
@@ -687,6 +763,32 @@ def _reset_form(known: list) -> None:
                 st.session_state["account_created_email"] = pending["email"]
                 st.rerun()
 
+
+
+def _unusable_config() -> str:
+    """Why `[auth]` / `[accounts]` is present but cannot be used, or "" if fine.
+
+    "Absent" (no key, or an empty table) is not this: that is how the app runs
+    open on purpose.
+    """
+    secrets = _secrets()
+    auth_raw = secrets.get(SECTION)
+    try:
+        auth_table = dict(auth_raw) if auth_raw is not None else {}
+    except Exception:  # noqa: BLE001
+        return "`[auth]` in secrets is not a table, so the app is locked until it is fixed."
+    if auth_table:
+        return ("`[auth]` is present but incomplete (it needs `redirect_uri`, "
+                "`cookie_secret` and a provider), so the app is locked until "
+                "it is fixed or the section is removed.")
+    acc_raw = secrets.get("accounts")
+    try:
+        acc_table = dict(acc_raw) if acc_raw is not None else {}
+    except Exception:  # noqa: BLE001
+        return "`[accounts]` in secrets is not a table, so the app is locked until it is fixed."
+    if any(str(k).lower() == "enabled" and k != "enabled" for k in acc_table):
+        return "`[accounts]` needs a lower-case `enabled` key, so the app is locked until it is fixed."
+    return ""
 
 
 def gate() -> None:
@@ -702,6 +804,13 @@ def gate() -> None:
     from ledger import accounts
 
     if not configured():
+        # Absent means open (demo mode, the page tests). Present but unusable
+        # must not mean open: it is a lock the owner meant and typed wrongly.
+        broken = _unusable_config()
+        if broken:
+            _auth_chrome()
+            st.error(broken)
+            st.stop()
         if accounts.enabled():
             _password_gate()
         return

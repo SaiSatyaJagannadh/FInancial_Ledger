@@ -157,8 +157,19 @@ def session(monkeypatch, cookies=None, **state):
     return auth.st.session_state
 
 
+def current_token(monkeypatch):
+    """A token for an account that still exists with the password it signed in
+    with. `_restore` now checks that once per session, so a token holding no
+    claim, or one for a removed row, is refused."""
+    from test_security_fixes import _account
+
+    monkeypatch.setattr("ledger.accounts.load", lambda *a, **k: ([_account("h1")], []))
+    return auth.make_token("ravi@example.com", "Ravi", KEY,
+                           claim=auth.claim_for("ravi@example.com", "h1", KEY))
+
+
 def test_a_valid_cookie_signs_the_session_back_in(monkeypatch):
-    token = auth.make_token("ravi@example.com", "Ravi", KEY)
+    token = current_token(monkeypatch)
     state = session(monkeypatch, {auth.COOKIE: token})
     auth._restore()
     assert state[auth.SESSION] == "ravi@example.com"
@@ -203,7 +214,7 @@ def test_signing_out_cannot_be_undone_by_the_cookie_still_in_the_page(monkeypatc
 
 def test_restoring_is_attempted_once_per_session(monkeypatch):
     """The latch also means a cookie cleared mid-session is not re-read."""
-    token = auth.make_token("ravi@example.com", "Ravi", KEY)
+    token = current_token(monkeypatch)
     state = session(monkeypatch, {auth.COOKIE: token})
     auth._restore()
     del state[auth.SESSION]
@@ -268,7 +279,7 @@ def _no_sheet(*_a, **_k):
 def test_a_refresh_with_the_cookie_lands_in_the_app_not_on_the_form(monkeypatch):
     """The bug this fixes: every refresh started an empty session, so the gate
     concluded nobody was signed in and showed the form again."""
-    token = auth.make_token("ravi@example.com", "Ravi", KEY)
+    token = current_token(monkeypatch)
     app = refreshed(monkeypatch, {auth.COOKIE: token}).run()
     assert not app.exception, [str(e.message) for e in app.exception]
     assert app.title[0].value == "Personal Ledger"

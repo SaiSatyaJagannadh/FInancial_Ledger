@@ -212,6 +212,11 @@ def restore(deletion: Deletion, secrets: dict | None = None):
     elif deletion.kind == CLEARANCE:
         clearance.add(record_, secrets)
     else:
+        held = interest.already_charged(interest.load(secrets)[0], record_.person,
+                                        record_.date, record_.currency)
+        if held:
+            raise EntryError(f"{record_.person} already has a charge for {held.month_label}; "
+                             "restoring this one would double the month.")
         interest.add(record_, secrets)
 
     _forget(deletion, secrets)
@@ -248,7 +253,12 @@ def _forget(deletion: Deletion, secrets: dict) -> None:
         return
     sheet = _sheet(secrets)
     cells = sheet.row_values(deletion.row)
-    if len(cells) < 2 or str(cells[1]).strip().lower() != deletion.kind:
+    try:
+        held = [str(c) for c in json.loads(cells[5])] if len(cells) > 5 else None
+    except ValueError:
+        held = None
+    if (len(cells) < 2 or str(cells[1]).strip().lower() != deletion.kind
+            or held != deletion.data):
         raise RuntimeError(
             f"Archive row {deletion.row} no longer matches: the tab changed "
             "since it was loaded. Reload and try again."

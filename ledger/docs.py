@@ -23,6 +23,9 @@ VISION_BUDGET = 170 * 1024
 #: Enough of a document to hold a statement page or two. Past this the model
 #: starts losing the middle anyway, and the user is better served by a crop.
 MAX_TEXT_CHARS = 24_000
+MAX_PAGES = 50
+MAX_SHEET_ROWS = 5_000
+MAX_SHEET_COLS = 50
 
 TEXT_SUFFIXES = (".pdf", ".xlsx", ".xlsm", ".csv", ".txt", ".tsv")
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
@@ -106,12 +109,15 @@ def _pdf_text(data: bytes) -> str:
     except Exception as exc:  # noqa: BLE001
         raise UnreadableDocument(f"That PDF could not be opened ({exc}).") from exc
 
-    pages = []
-    for page in reader.pages:
+    pages, size = [], 0
+    for page in reader.pages[:MAX_PAGES]:
+        if size > MAX_TEXT_CHARS:
+            break
         try:
             pages.append(page.extract_text() or "")
         except Exception:  # noqa: BLE001 — one bad page must not lose the rest
             pages.append("")
+        size += len(pages[-1])
     text = "\n".join(pages).strip()
     if not text:
         raise UnreadableDocument(
@@ -134,11 +140,15 @@ def _sheet_text(data: bytes) -> str:
         # The sheet name is only worth writing if the sheet has something in
         # it; otherwise a blank workbook reads as content and never trips the
         # "this is empty" check below.
-        rows = [
-            " | ".join("" if c is None else str(c) for c in row)
-            for row in sheet.iter_rows(values_only=True)
-            if any(str(c).strip() for c in row if c is not None)
-        ]
+        # Bounded by scan, not just by output: a tiny file can claim A1:ZZZ9999999.
+        rows, size = [], 0
+        for row in sheet.iter_rows(max_row=MAX_SHEET_ROWS, max_col=MAX_SHEET_COLS,
+                                   values_only=True):
+            if any(str(c).strip() for c in row if c is not None):
+                rows.append(" | ".join("" if c is None else str(c) for c in row))
+                size += len(rows[-1])
+                if size > MAX_TEXT_CHARS:
+                    break
         if rows:
             lines.append(f"# sheet: {sheet.title}")
             lines.extend(rows)

@@ -24,7 +24,8 @@ from ledger.compute import by_person
 from ledger.money import Currency, compact, format_money, to_minor
 from ledger.ui import (
     attachment_button, attachment_field, attachment_is_stored, clear_cache,
-    demo_banner, head_row, load_ledger, ruled_table, safe_href, esc, styles,
+    demo_banner, head_row, load_ledger, ruled_table, safe_href, esc, esc_line,
+    md_plain, styles,
 )
 
 styles()
@@ -194,9 +195,9 @@ with st.expander("Add interest", expanded=not here, icon=":material/add:"):
                 + " on the ledger, shown for reference."
             )
         elif balance < 0:
-            st.caption(f"You owe **{person}** {format_money(abs(balance), currency)}.")
+            st.caption(f"You owe **{md_plain(person)}** {format_money(abs(balance), currency)}.")
         else:
-            st.caption(f"**{person}** is settled on the ledger.")
+            st.caption(f"**{md_plain(person)}** is settled on the ledger.")
 
         try:
             minor = to_minor(amount_text) if amount_text.strip() else 0
@@ -268,6 +269,7 @@ with st.expander("Add interest", expanded=not here, icon=":material/add:"):
                     saved = interest.for_month(interest.load()[0], month, currency)[person]
                     did = interest.sync_ledger_entry(
                         result.entries, saved, taker, taker_ledger, note=purpose,
+                        was_moved_to=already.moved_to if already else "",
                     )
                     wrote = {
                         "added": f" A ledger entry was written for {taker}.",
@@ -458,7 +460,7 @@ def _edit(charge) -> None:
     """Change any field of a recorded charge, then write it back to its row."""
     from dataclasses import replace
 
-    st.caption(f"{charge.person}, {charge.month_label}")
+    st.caption(f"{md_plain(charge.person)}, {charge.month_label}")
 
     amount = st.text_input(
         f"Amount ({charge.currency.symbol})",
@@ -471,6 +473,7 @@ def _edit(charge) -> None:
         format_func=STATUS_LABELS.get, horizontal=True,
     )
     paid_now_text = ""
+    clear_mark = False
     if happened == PARTLY:
         paid_now_text = st.text_input(
             f"Given so far ({charge.currency.symbol})",
@@ -500,8 +503,12 @@ def _edit(charge) -> None:
     if moved_already and not also:
         # This page never removes a ledger row, so the mark stays with it —
         # clearing it would count the same money here and there at once.
-        st.warning(f"{charge.moved_to} already has this in the ledger. That entry "
-                   "stays. Remove it on the ledger if it was a mistake.")
+        if interest.find_ledger_entry(result.entries, charge, charge.moved_to, None) is None:
+            st.warning(f"{md_plain(charge.moved_to)}'s ledger entry for this is gone.")
+            clear_mark = st.checkbox("Count it as interest again (clear the hand-on mark)")
+        else:
+            st.warning(f"{md_plain(charge.moved_to)} already has this in the ledger. That entry "
+                       "stays. Remove it on the ledger if it was a mistake.")
     taker_now, book_now = "", ""
     if also:
         take, book = st.columns(2)
@@ -509,7 +516,12 @@ def _edit(charge) -> None:
             "Who took it", everyone,
             index=everyone.index(charge.moved_to) if moved_already else 0,
         )
-        book_now = book.selectbox("Onto which ledger", ledger_options(taker_now))
+        books = ledger_options(taker_now)
+        held = interest.find_ledger_entry(result.entries, charge, taker_now, None)
+        book_now = book.selectbox(
+            "Onto which ledger", books,
+            index=books.index(held.ledger) if held and held.ledger in books else 0,
+        )
 
     edited, problems = None, []
     try:
@@ -560,6 +572,8 @@ def _edit(charge) -> None:
                 # that the ledger is counting it. Without it the same money is
                 # in both figures — which is the whole reason the column exists.
                 edited = replace(edited, moved_to=taker_now)
+            elif clear_mark:
+                edited = replace(edited, moved_to="")
             interest.replace_row(charge, edited)
             did = ""
             if also:
@@ -567,6 +581,7 @@ def _edit(charge) -> None:
                 # a second loan in the ledger, nor land on a stranger's row.
                 did = interest.sync_ledger_entry(
                     result.entries, edited, taker_now, book_now, note=note,
+                    was_moved_to=charge.moved_to,
                 )
                 clear_cache()
         except Exception as exc:  # noqa: BLE001 — show what the sheet said
@@ -616,7 +631,7 @@ with st.container(key="khata-rows-charge"):
         )
         with detail:
             st.markdown(
-                f'<div class="khata-cell khata-meta">{esc(charge.note)}'
+                f'<div class="khata-cell khata-meta">{esc_line(charge.note)}'
                 + (f' <span class="khata-src">In the ledger under {esc(charge.moved_to)}</span>'
                    if charge.moved_to else "")
                 + "</div>",
@@ -665,7 +680,7 @@ if not _owing:
 with st.container(key="khata-list-collect"):
     for _row in _owing:
         with st.expander(
-            f"{_row['person']}: {format_money(_row['remaining_minor'], currency)} "
+            f"{md_plain(_row['person'])}: {format_money(_row['remaining_minor'], currency)} "
             f"still due ({', '.join(c.month_label for c in _row['charges'])})"
         ):
             _text = interest.reminder(_row)

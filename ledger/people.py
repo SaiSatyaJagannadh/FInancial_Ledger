@@ -205,18 +205,6 @@ def set_parent(person: str, parent: str, secrets: dict | None = None) -> None:
         _announce("Grouping", "added", after=member, secrets=secrets)
         return
 
-def _announce(kind: str, action: str, *, before=None, after=None,
-              secrets: dict | None = None, redact: tuple = ()) -> None:
-    """Best-effort notice. A broken notifier must never undo a write."""
-    try:
-        from ledger import notify
-
-        notify.changed(kind, action, before=before, after=after,
-                       columns=COLUMNS, secrets=secrets, redact=redact)
-    except Exception:  # noqa: BLE001
-        pass
-
-
     if not _matches(sheet.row_values(was.row), was):
         raise RuntimeError(
             f"Row {was.row} no longer matches: the sheet changed since it was "
@@ -227,6 +215,18 @@ def _announce(kind: str, action: str, *, before=None, after=None,
     store.write_cells(sheet, [row], f"A{was.row}:{last}{was.row}",
                       "USER_ENTERED")
     _announce("Grouping", "edited", before=was, after=member, secrets=secrets)
+
+
+def _announce(kind: str, action: str, *, before=None, after=None,
+              secrets: dict | None = None, redact: tuple = ()) -> None:
+    """Best-effort notice. A broken notifier must never undo a write."""
+    try:
+        from ledger import notify
+
+        notify.changed(kind, action, before=before, after=after,
+                       columns=COLUMNS, secrets=secrets, redact=redact)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _matches(cells: list[str], member: Member) -> bool:

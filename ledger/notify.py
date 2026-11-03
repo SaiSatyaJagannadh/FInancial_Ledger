@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import pathlib
 import smtplib
+import ssl
 import sys
 import threading
 from datetime import datetime
@@ -178,15 +179,14 @@ def _body(kind: str, action: str, before, after, columns: list[str],
 def _send(subject: str, body: str, config: dict) -> None:
     """Deliver one message. Called on a background thread; never raises."""
     global _LAST_ERROR
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = config["user"]
-    message["To"] = config["to"]
-    message.set_content(body)
-
     try:
+        message = EmailMessage()
+        message["Subject"] = subject
+        message["From"] = config["user"]
+        message["To"] = config["to"]
+        message.set_content(body)
         with smtplib.SMTP(config["host"], config["port"], timeout=TIMEOUT) as server:
-            server.starttls()
+            server.starttls(context=ssl.create_default_context())
             server.login(config["user"], config["password"])
             server.send_message(message)
     except Exception as exc:  # noqa: BLE001 — a notification must not escape

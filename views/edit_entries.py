@@ -12,7 +12,7 @@ import streamlit as st
 
 from ledger import people as grouping
 from ledger.money import Currency, compact, format_money
-from ledger.ui import demo_banner, entry_table, load_ledger, styles
+from ledger.ui import demo_banner, entry_table, load_ledger, md_plain, styles
 
 ANYONE = "Everyone"
 ANY_YEAR = "All years"
@@ -79,7 +79,7 @@ with st.expander("Group people together", expanded=False, icon=":material/group:
     if grouped:
         for head, names in grouped.items():
             others = [n for n in names if n != head]
-            st.markdown(f"- **{head}**, with {', '.join(others)}")
+            st.markdown(f"- **{md_plain(head)}**, with {md_plain(', '.join(others))}")
     else:
         st.caption("Nobody is grouped yet.")
 

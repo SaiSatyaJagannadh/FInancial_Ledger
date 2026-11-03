@@ -27,6 +27,20 @@ def esc(value) -> str:
     return html.escape(str(value or ""), quote=True)
 
 
+def esc_line(value) -> str:
+    """`esc` for a note shown in one line of markup: newlines collapsed first."""
+    return esc(" ".join(str(value or "").split()))
+
+
+def md_plain(value) -> str:
+    """Free text for a plain-Markdown sink (a label, caption or chat reply).
+
+    Escapes only what makes an image or a link, `[`, `]` and `<`, so a name or
+    punctuation reads as typed while `![x](http://tracker)` stays text.
+    """
+    return re.sub(r"([\[\]<])", r"\\\1", str(value or ""))
+
+
 def safe_href(url: str) -> str:
     """The URL if it is safe to link to, otherwise empty.
 
@@ -34,6 +48,8 @@ def safe_href(url: str) -> str:
     no legitimate reason for a statement link to be a javascript: or data: URI.
     """
     cleaned = str(url or "").strip()
+    if re.search(r"""[\s"'<>`\\\x00-\x1f\x7f]""", cleaned):
+        return ""                     # would break out of an href="..." attribute
     return cleaned if cleaned.lower().startswith(SAFE_SCHEMES) else ""
 
 CACHE_SECONDS = 60
@@ -412,11 +428,14 @@ def delete_control(entry, scope: str) -> bool:
     if entry.row is None:
         return False
     armed = f"arm_{scope}_{entry.row}"
+    # Armed for this record, not for a row number: rows shift under another
+    # session's delete, and the same number would then name a stranger.
+    who = tuple(entry.to_row())
 
-    if not st.session_state.get(armed):
+    if st.session_state.get(armed) != who:
         if st.button("Delete", key=f"del_{scope}_{entry.row}", type="tertiary",
                      help="Remove this entry from the sheet", width="stretch"):
-            st.session_state[armed] = True
+            st.session_state[armed] = who
             st.rerun()
         return False
 
@@ -574,9 +593,9 @@ def attachment_button(reference: str, key: str) -> None:
         return
 
     if stored.mimetype.startswith("image/"):
-        st.image(stored.data, caption=stored.name, width="stretch")
+        st.image(stored.data, caption=md_plain(stored.name), width="stretch")
     else:
-        st.caption(f"{stored.name}, {len(stored.data) // 1024} KB")
+        st.caption(f"{md_plain(stored.name)}, {len(stored.data) // 1024} KB")
 
     save, hide = st.columns(2)
     save.download_button(
@@ -705,7 +724,7 @@ def entry_table(entries: list, scope: str, *, empty: str = "Nothing here yet.") 
                 ) if href else ' <span class="khata-src">Link removed</span>'
             with note:
                 st.markdown(
-                    f'<div class="khata-cell khata-meta">{esc(entry.note)}'
+                    f'<div class="khata-cell khata-meta">{esc_line(entry.note)}'
                     + (f' <span class="khata-src">{mark}</span>' if mark else "")
                     + link + "</div>",
                     unsafe_allow_html=True,
@@ -815,7 +834,7 @@ def transaction_table(rows: list, scope: str, *, empty: str = "Nothing here yet.
             category.markdown(
                 f'<div class="khata-cell">{esc(t.category)}</div>', unsafe_allow_html=True
             )
-            bits = ". ".join(esc(x) for x in (t.description, t.note) if x)
+            bits = ". ".join(esc_line(x) for x in (t.description, t.note) if x)
             mark = _SOURCE_MARK.get(t.source, "")
             detail.markdown(
                 f'<div class="khata-cell khata-meta">{bits}'
