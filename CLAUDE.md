@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~855)
+.venv/bin/python -m pytest -q                     # all tests (~910)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -474,6 +474,14 @@ user, `hmac.compare_digest` for the comparison, and one message for both
 account). An unknown address still costs a hash so the two answers take the
 same time.
 
+**Sign-up proves the address when `[notify]` is set**: the same six-digit code
+(`reset_code`, fifteen minutes, five guesses, session state only) is mailed to the
+typed address and no row is written until it is right. Without `[notify]` sign-up
+is as before, and change notices and the archive's `by` mark a password signer
+`(unverified)` (`accounts.attribution`). Mailed codes are limited per address
+plus client IP (`accounts.mail_allowed`), with a separate ceiling of
+`MAIL_CEILING` per address, so a stranger's repeats do not stop the real holder.
+
 **Forgotten passwords** go through a third tab on the same gate. A six-digit
 code is emailed to *the address on the account* — never one typed into the form
 — reusing the `[notify]` SMTP settings, so it needs no config of its own. The
@@ -626,6 +634,14 @@ two notices. Both are true; the second reads `moved_to: — → Vihar`.
 - PDF exports print `INR`/`USD` rather than `₹` — fpdf's core fonts are
   latin-1 and the glyph raises.
 - NVIDIA's endpoint has no speech-to-text, so there is no voice input.
+- Five `AppTest` cases fail under Streamlit 1.66, and failed before the redesign too:
+  `tests/test_auth_gate.py` (sign-out, three) and `tests/test_pages.py` (`add_entry`, two).
+  `st.page_link` finds no registered page when a view runs outside the router, and
+  `filtered_state` is missing after a sign-out. The `ledger.notify` self-check also fails.
+  CI on `main` has been red since at least `9f33f3c`.
+- Sheets turns number-shaped text into a number before storing it, so a note of
+  `+919876543210`, `007` or `2.50` reads back as `919876543210`, `7` or `2.5`. Checked on
+  the real sheet; the row guard still accepts all three.
 - The repo is public and indexed at
   [deepwiki.com/SaiSatyaJagannadh/FInancial_Ledger](https://deepwiki.com/SaiSatyaJagannadh/FInancial_Ledger),
   which regenerates from `README.md` and this file on a push. A stale claim in

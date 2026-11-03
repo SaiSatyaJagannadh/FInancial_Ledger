@@ -222,9 +222,9 @@ def changed(kind: str, action: str, *, before=None, after=None,
         return False
 
     if by is None:
-        from ledger import auth
+        from ledger import accounts
 
-        by = auth.current_user()
+        by = accounts.attribution()
 
     subject = _subject(kind, action, record)
     body = _body(kind, action, before, after, columns, by=by, redact=redact)

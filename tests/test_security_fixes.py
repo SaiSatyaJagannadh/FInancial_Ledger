@@ -502,6 +502,8 @@ def test_reset_gives_the_same_next_screen_for_a_known_and_an_unknown_address(mon
 
 
 def test_reset_requests_per_address_are_limited_across_sessions(monkeypatch):
+    # edited on purpose: the limit is now per address AND client, so pin the client
+    monkeypatch.setattr(auth, "_client", lambda: "10.0.0.1")
     accounts._FAILS.clear()
     for _ in range(accounts.FREE_GUESSES + 1):
         at, _sent = _drive_reset(monkeypatch, "c@example.test", True)
@@ -598,3 +600,96 @@ def test_the_guard_accepts_a_numeric_note_sheets_reformatted():
     row = ["2026-01-01", "Ravi", "Ravi", "given", "1000", "INR", "2.5"]
     assert store._same_entry(row, e)
     assert not store._same_entry(row[:6] + ["2.6"], e)
+
+
+# ---- reset limit keyed by client; sign-up proves the address -----------------
+
+def test_a_strangers_reset_requests_do_not_stop_the_real_holder(monkeypatch):
+    accounts._FAILS.clear()
+    monkeypatch.setattr(auth, "_client", lambda: "6.6.6.6")
+    for _ in range(accounts.FREE_GUESSES + 1):
+        _drive_reset(monkeypatch, "h@example.test", True)
+    _at, blocked = _drive_reset(monkeypatch, "h@example.test", True)
+    assert not blocked
+    monkeypatch.setattr(auth, "_client", lambda: "1.1.1.1")
+    _at, sent = _drive_reset(monkeypatch, "h@example.test", True)
+    assert sent == ["h@example.test"]
+    accounts._FAILS.clear()
+
+
+def test_one_inbox_cannot_be_flooded_from_many_clients():
+    accounts._FAILS.clear()
+    results = [accounts.mail_allowed("reset", "f@example.test", f"ip{i}")
+               for i in range(accounts.MAIL_CEILING + 3)]
+    assert results[0] and not results[-1]
+    accounts._FAILS.clear()
+
+
+def _signup_app():
+    from ledger import auth
+
+    auth._password_gate()
+
+
+def _drive_signup(monkeypatch, sent, made):
+    monkeypatch.setattr(accounts, "enabled", lambda *a, **k: True)
+    monkeypatch.setattr(accounts, "load", lambda *a, **k: ([], []))
+    monkeypatch.setattr(accounts, "signup_code", lambda *a, **k: "")
+    monkeypatch.setattr(accounts, "settings_for_email_exists", lambda *a, **k: True)
+    monkeypatch.setattr(accounts, "send_reset_code",
+                        lambda a, c, *x, **k: sent.append((a.email, c)) or "")
+    monkeypatch.setattr(accounts, "create",
+                        lambda n, e, p, *a, **k: made.append(e)
+                        or accounts.Account(e, n, "h", date(2026, 1, 1)))
+    monkeypatch.setattr(auth, "_client", lambda: "2.2.2.2")
+    at = AppTest.from_function(_signup_app).run()
+    at.text_input(key="signup_name").input("New")
+    at.text_input(key="signup_email").input("New@Example.test")
+    at.text_input(key="signup_password").input("longenough1")
+    at.text_input(key="signup_confirm").input("longenough1")
+    next(b for b in at.button if b.label == "Create account").click().run()
+    return at
+
+
+def test_signup_waits_for_the_mailed_code_before_writing_a_row(monkeypatch):
+    accounts._FAILS.clear()
+    sent, made = [], []
+    at = _drive_signup(monkeypatch, sent, made)
+    assert sent and sent[0][0] == "new@example.test" and not made
+    at.text_input(key="signup_mail_code").input("not-it")
+    next(b for b in at.button if b.label == "Confirm").click().run()
+    assert not made
+    at.text_input(key="signup_mail_code").input(sent[0][1])
+    next(b for b in at.button if b.label == "Confirm").click().run()
+    assert made == ["new@example.test"]
+    accounts._FAILS.clear()
+
+
+def test_signup_code_dies_after_five_wrong_guesses(monkeypatch):
+    accounts._FAILS.clear()
+    sent, made = [], []
+    at = _drive_signup(monkeypatch, sent, made)
+    for _ in range(accounts.RESET_ATTEMPTS):
+        at.text_input(key="signup_mail_code").input("000x00")
+        next(b for b in at.button if b.label == "Confirm").click().run()
+    assert auth._SIGNUP not in at.session_state and not made
+    accounts._FAILS.clear()
+
+
+def test_a_non_ascii_code_is_just_wrong_not_a_crash(monkeypatch):
+    accounts._FAILS.clear()
+    sent, made = [], []
+    at = _drive_signup(monkeypatch, sent, made)
+    at.text_input(key="signup_mail_code").input("१२३४५६")
+    next(b for b in at.button if b.label == "Confirm").click().run()
+    assert not at.exception and not made
+    accounts._FAILS.clear()
+
+
+def test_without_notify_a_password_signer_is_named_unverified(monkeypatch):
+    monkeypatch.setattr(auth, "current_user", lambda: "a@example.test")
+    monkeypatch.setattr(auth, "configured", lambda: False)
+    monkeypatch.setattr(accounts, "settings_for_email_exists", lambda *a: False)
+    assert accounts.attribution() == "a@example.test (unverified)"
+    monkeypatch.setattr(accounts, "settings_for_email_exists", lambda *a: True)
+    assert accounts.attribution() == "a@example.test"

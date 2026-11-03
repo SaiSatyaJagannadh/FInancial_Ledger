@@ -496,6 +496,74 @@ def _signed_out_screen() -> None:
     st.stop()
 
 
+def _client() -> str:
+    try:
+        return st.context.ip_address or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+_SIGNUP = "signup_pending"     # a sign-up held until its emailed code is entered
+
+
+def _finish_signup(name: str, email: str, password: str) -> None:
+    from ledger import accounts
+    from ledger.models import EntryError
+
+    try:
+        made = accounts.create(name, email, password)
+    except EntryError as exc:
+        st.error(str(exc))
+        if "already an account" in str(exc):
+            st.info(
+                "If that account is yours and you have forgotten the "
+                "password, use the **Forgotten password** tab above."
+            )
+    except RuntimeError as exc:
+        st.error(str(exc))
+    except Exception as exc:  # noqa: BLE001 — say what the sheet said
+        st.error(f"Could not create the account: {exc}")
+    else:
+        # Registering is not signing in: the first typing of the password
+        # should be now, while it is still in mind.
+        st.session_state.pop(_SIGNUP, None)
+        st.session_state["account_created"] = True
+        st.session_state["account_created_email"] = made.email
+        st.rerun()
+
+
+def _signup_code_step(pending: dict) -> None:
+    """Hold the sign-up until the code mailed to the typed address is entered."""
+    from datetime import datetime
+    from hmac import compare_digest
+
+    from ledger import accounts
+
+    if datetime.now() > datetime.fromisoformat(pending["until"]):
+        st.session_state.pop(_SIGNUP, None)
+        st.warning("That code has expired. Start again.")
+        return
+    st.caption(f"We emailed a code to **{pending['email']}**.")
+    with st.form("signup_code_form"):
+        given = st.text_input("Code from your email", key="signup_mail_code")
+        ok = st.form_submit_button("Confirm", type="primary")
+        quit_ = st.form_submit_button("Cancel")
+    if quit_:
+        st.session_state.pop(_SIGNUP, None)
+        st.rerun()
+    if ok:
+        if compare_digest(str(given).strip().encode(), pending["code"].encode()):
+            _finish_signup(pending["name"], pending["email"], pending["password"])
+            return
+        pending["left"] -= 1
+        if pending["left"] <= 0:
+            st.session_state.pop(_SIGNUP, None)
+            st.error("Too many wrong codes. Start again.")
+        else:
+            st.session_state[_SIGNUP] = pending
+            st.error(f"That code is not right. {pending['left']} tries left.")
+
+
 def _password_gate() -> None:
     """Sign in or register against the `users` tab, then stop the page.
 
@@ -503,6 +571,8 @@ def _password_gate() -> None:
     reason the OIDC gate does: the router is the only way in, and a login that
     is itself a page is a login somebody can navigate around.
     """
+    from datetime import date, datetime, timedelta
+
     from ledger import accounts
     from ledger.models import EntryError
 
@@ -558,11 +628,7 @@ def _password_gate() -> None:
             submitted = st.form_submit_button("Sign in", type="primary",
                                               width="stretch")
         if submitted:
-            try:
-                client = st.context.ip_address or ""
-            except Exception:
-                client = ""
-            account = accounts.authenticate(email, password, client=client)
+            account = accounts.authenticate(email, password, client=_client())
             if account is None:
                 # One message for both causes. Saying which was wrong tells a
                 # stranger whether an address has an account here.
@@ -582,6 +648,9 @@ def _password_gate() -> None:
                 st.rerun()
 
     with sign_up:
+      if st.session_state.get(_SIGNUP):
+        _signup_code_step(st.session_state[_SIGNUP])
+      else:
         code_wanted = accounts.signup_code()
         if not code_wanted and not first_ever:
             st.warning(
@@ -608,28 +677,26 @@ def _password_gate() -> None:
                 wrong.append("That sign-up code is not right.")
             for problem in wrong:
                 st.error(problem)
-            if not wrong:
-                try:
-                    made = accounts.create(name, new_email, new_password)
-                except EntryError as exc:
-                    st.error(str(exc))
-                    if "already an account" in str(exc):
-                        st.info(
-                            "If that account is yours and you have forgotten the "
-                            "password, use the **Forgotten password** tab above."
-                        )
-                except RuntimeError as exc:
-                    st.error(str(exc))
-                except Exception as exc:  # noqa: BLE001 — say what the sheet said
-                    st.error(f"Could not create the account: {exc}")
+            if not wrong and not accounts.settings_for_email_exists():
+                _finish_signup(name, new_email, new_password)
+            elif not wrong:
+                address = new_email.strip().lower()
+                if not accounts.mail_allowed("signup", address, _client()):
+                    st.error("Too many requests for that address. Try again later.")
                 else:
-                    # Registering is not signing in. Landing straight in the
-                    # app hides whether the password actually works — the first
-                    # time it gets typed should be now, while it is still in
-                    # mind, not on some later visit when it is not.
-                    st.session_state["account_created"] = True
-                    st.session_state["account_created_email"] = made.email
-                    st.rerun()
+                    code = accounts.reset_code()
+                    sent = accounts.send_reset_code(
+                        accounts.Account(address, name, "", date.today()), code, purpose="sign-up")
+                    if sent:
+                        st.error("Could not send the code. Try again later.")
+                    else:
+                        st.session_state[_SIGNUP] = {
+                            "name": name, "email": address, "password": new_password,
+                            "code": code, "left": accounts.RESET_ATTEMPTS,
+                            "until": (datetime.now() + timedelta(
+                                minutes=accounts.RESET_MINUTES)).isoformat(),
+                        }
+                        st.rerun()
 
     with forgot:
         _reset_form(known)
@@ -683,14 +750,12 @@ def _reset_form(known: list) -> None:
             )
         if asked:
             address = str(email or "").strip().lower()
-            key = _RESET_KEY + address
             account = accounts.find(email, known)
-            if accounts._wait_left(key):
-                # Per address and per process, so a new browser session does not
-                # reset it; the same answer whether or not the address exists.
+            if not accounts.mail_allowed("reset", address, _client()):
+                # Per address and client, so a stranger's repeats do not stop
+                # the real holder; the same answer whether or not it exists.
                 st.error("Too many requests for that address. Try again later.")
                 return
-            accounts._note(key, False)
             code = accounts.reset_code()
             problem = ""
             if account is not None and can_email:
@@ -740,7 +805,7 @@ def _reset_form(known: list) -> None:
         key = _RESET_KEY + pending["email"]
         if accounts._wait_left(key):
             st.error("Too many wrong codes for that address. Try again later.")
-        elif not compare_digest(str(given).strip(), str(wanted)):
+        elif not compare_digest(str(given).strip().encode(), str(wanted).encode()):
             accounts._note(key, False)
             pending["left"] -= 1
             if pending["left"] <= 0:

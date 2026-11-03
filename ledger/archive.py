@@ -123,7 +123,7 @@ def record(kind: str, item, secrets: dict | None = None) -> None:
     broken archive means the row stays on the sheet instead of vanishing with
     no trace of it anywhere.
     """
-    from ledger import auth, store
+    from ledger import accounts, store
 
     secrets = store._secrets() if secrets is None else secrets
     if not store.is_configured(secrets):
@@ -132,7 +132,7 @@ def record(kind: str, item, secrets: dict | None = None) -> None:
     entry = Deletion(
         deleted_at=datetime.now(),
         kind=kind,
-        by=auth.current_user(),
+        by=accounts.attribution(),
         summary=summarise(item),
         source_row=getattr(item, "row", None),
         data=list(item.to_row()),

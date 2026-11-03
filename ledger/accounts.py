@@ -265,7 +265,7 @@ def _wait_left(key: str) -> float:
         return max(0.0, _FAILS.get(key, (0, 0.0))[1] - _clock())
 
 
-def _note(key: str, ok: bool) -> None:
+def _note(key: str, ok: bool, free: int = FREE_GUESSES) -> None:
     with _FAILS_LOCK:
         if ok:
             _FAILS.pop(key, None)
@@ -273,8 +273,47 @@ def _note(key: str, ok: bool) -> None:
         if len(_FAILS) > 10_000:               # bound memory under address spraying
             _FAILS.clear()
         n = _FAILS.get(key, (0, 0.0))[0] + 1
-        over = n - FREE_GUESSES
+        over = n - free
         _FAILS[key] = (n, _clock() + (min(MAX_WAIT, 2.0 ** over) if over > 0 else 0.0))
+
+
+#: Mailed codes per address, whoever asks. Generous, so one stranger cannot
+#: cheaply lock the owner out, but finite, so nobody can flood one inbox.
+# ponytail: the fallback with no client IP is address alone, so this ceiling is all there is then.
+MAIL_CEILING = 20
+
+
+def mail_allowed(purpose: str, address: str, client: str = "") -> bool:
+    """May another code be mailed to `address`? Counts the request if so.
+
+    Keyed by address plus client, so a stranger's repeats do not stop the real
+    holder (a different client); and by address alone at a higher ceiling.
+    """
+    address = str(address or "").strip().lower()
+    each, every = f"\0{purpose}:{address}|{client}", f"\0{purpose}-all:{address}"
+    if _wait_left(each) or _wait_left(every):
+        return False
+    _note(each, False)
+    _note(every, False, MAIL_CEILING)
+    return True
+
+
+def attribution(secrets: dict | None = None) -> str:
+    """Who to name on a change notice or archive row.
+
+    A password sign-in proved nothing about the address unless `[notify]` was
+    on to mail a code, so without it the signer is marked unverified.
+    """
+    from ledger import auth
+
+    who = auth.current_user()
+    if who and not auth.configured():
+        try:
+            if not settings_for_email_exists(secrets):
+                return f"{who} (unverified)"
+        except Exception:  # noqa: BLE001 — attribution never fails a save
+            return f"{who} (unverified)"
+    return who
 
 
 def check_signup_word(given: str, wanted: str) -> bool:
@@ -388,7 +427,7 @@ def reset_code() -> str:
 
 
 def send_reset_code(account: Account, code: str,
-                    secrets: dict | None = None) -> str:
+                    secrets: dict | None = None, purpose: str = "password reset") -> str:
     """Email a reset code to the account's own address. Returns "" on success.
 
     Sent to the address on the account, never to one typed into the form, so
@@ -409,8 +448,8 @@ def send_reset_code(account: Account, code: str,
     to_them = dict(config)
     to_them["to"] = account.email
     notify._send(
-        "[Personal Ledger] Your password reset code",
-        f"Your reset code is {code}\n\n"
+        f"[Personal Ledger] Your {purpose} code",
+        f"Your {purpose} code is {code}\n\n"
         "It works once, in the browser tab you asked from, for the next "
         f"{RESET_MINUTES} minutes. If you did not ask for it, ignore this: "
         "nothing has changed on your account.\n",
