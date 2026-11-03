@@ -634,7 +634,6 @@ two notices. Both are true; the second reads `moved_to: — → Vihar`.
 - PDF exports print `INR`/`USD` rather than `₹` — fpdf's core fonts are
   latin-1 and the glyph raises.
 - NVIDIA's endpoint has no speech-to-text, so there is no voice input.
-- The `ledger.notify` self-check fails; `pytest` does not run it.
 - Sheets turns number-shaped text into a number before storing it, so a note of
   `+919876543210`, `007` or `2.50` reads back as `919876543210`, `7` or `2.5`. Checked on
   the real sheet; the row guard still accepts all three.

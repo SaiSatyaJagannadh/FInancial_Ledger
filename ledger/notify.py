@@ -275,7 +275,7 @@ def demo() -> None:
     charge = lambda m, moved="": Charge(  # noqa: E731
         date=date(2026, 7, 1), person="Narayana", amount_minor=m, moved_to=moved)
     moved = describe(charge(15_000_00), charge(15_000_00, "Vihar"), ICOLUMNS)
-    assert moved == ["moved_to: — → Vihar"], moved
+    assert "moved_to: — → Vihar" in moved, moved   # a hand-on also moves `paid` and `kind`
 
     # Nothing configured means nothing sent, and no exception either.
     assert settings(None) is None
