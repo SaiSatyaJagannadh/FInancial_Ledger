@@ -634,11 +634,7 @@ two notices. Both are true; the second reads `moved_to: — → Vihar`.
 - PDF exports print `INR`/`USD` rather than `₹` — fpdf's core fonts are
   latin-1 and the glyph raises.
 - NVIDIA's endpoint has no speech-to-text, so there is no voice input.
-- Five `AppTest` cases fail under Streamlit 1.66, and failed before the redesign too:
-  `tests/test_auth_gate.py` (sign-out, three) and `tests/test_pages.py` (`add_entry`, two).
-  `st.page_link` finds no registered page when a view runs outside the router, and
-  `filtered_state` is missing after a sign-out. The `ledger.notify` self-check also fails.
-  CI on `main` has been red since at least `9f33f3c`.
+- The `ledger.notify` self-check fails; `pytest` does not run it.
 - Sheets turns number-shaped text into a number before storing it, so a note of
   `+919876543210`, `007` or `2.50` reads back as `919876543210`, `7` or `2.5`. Checked on
   the real sheet; the row guard still accepts all three.

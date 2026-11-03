@@ -25,6 +25,11 @@ def _boom(*_args, **_kwargs):
     raise AssertionError("the users tab must not be read to answer 'who is signed in'")
 
 
+def got(app: AppTest, key: str):
+    """What a run left in state; Streamlit 1.66 dropped `filtered_state` from AppTest."""
+    return app.session_state[key] if key in app.session_state else None
+
+
 def gate_app(signed_in: str = "", signed_out: bool = False) -> AppTest:
     """The router's two lines — the gate and the identity — around a page."""
     def script() -> None:
@@ -62,7 +67,7 @@ def test_a_signed_in_session_reaches_the_app_without_reading_the_sheet(accounts_
 def test_signing_out_shows_a_signed_out_page_not_the_form_again(accounts_on):
     app = gate_app(signed_out=True).run()
     assert not app.exception, [str(e.message) for e in app.exception]
-    assert not app.session_state.filtered_state.get(auth.SESSION)
+    assert not got(app, auth.SESSION)
     labels = [b.label for b in app.button]
     assert labels == ["Sign in again"], labels
     # st.stop() ran, so nothing of the app itself was built.
@@ -76,7 +81,7 @@ def test_the_way_back_in_leads_to_the_form(monkeypatch):
     app = gate_app(signed_out=True).run()
     app.button[0].click().run()
     assert not app.exception, [str(e.message) for e in app.exception]
-    assert auth.SIGNED_OUT not in app.session_state.filtered_state
+    assert auth.SIGNED_OUT not in app.session_state
     assert [t.label for t in app.tabs][:1] == ["Sign in"], [t.label for t in app.tabs]
 
 
@@ -92,14 +97,14 @@ def test_sign_out_clears_the_typed_email_as_well_as_the_session():
         _auth._sign_out()
 
     signing_out = AppTest.from_function(script, default_timeout=30)
-    for key, value in app.session_state.filtered_state.items():
-        signing_out.session_state[key] = value
+    for key in (auth.SESSION, auth.SESSION_NAME, "login_email", auth._RESET):
+        signing_out.session_state[key] = app.session_state[key]
+    assert got(signing_out, auth.SESSION), "or the checks below prove nothing"
     signing_out.run()
 
-    left = signing_out.session_state.filtered_state
-    assert not left.get(auth.SESSION) and not left.get(auth.SESSION_NAME)
-    assert not left.get("login_email") and not left.get(auth._RESET)
-    assert left[auth.SIGNED_OUT] is True
+    assert not got(signing_out, auth.SESSION) and not got(signing_out, auth.SESSION_NAME)
+    assert not got(signing_out, "login_email") and not got(signing_out, auth._RESET)
+    assert got(signing_out, auth.SIGNED_OUT) is True
 
 
 def test_the_gate_does_nothing_at_all_when_accounts_are_off(monkeypatch):

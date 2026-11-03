@@ -37,7 +37,7 @@ def test_the_pages_were_actually_found():
 #: `AppTest.from_file` does not set up — it runs one script, not the app. The
 #: link works in the real app (and in CI's boot-and-curl); only this harness
 #: cannot see it. Tolerated by exact signature so a genuine crash still fails.
-HARNESS_GAP = "url_pathname"
+HARNESS_GAP = "Could not find page: `views/edit_entries.py`"
 
 
 def render(page: str) -> list[str]:
