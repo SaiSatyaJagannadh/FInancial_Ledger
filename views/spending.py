@@ -12,7 +12,7 @@ import streamlit as st
 
 from ledger import spend
 from ledger.money import Currency, compact, format_money
-from ledger.ui import demo_banner, load_ledger, styles, transaction_table
+from ledger.ui import demo_banner, load_ledger, ruled_table, styles, transaction_table
 
 styles()
 
@@ -28,7 +28,7 @@ for problem in problems:
 
 if not rows:
     st.info(
-        "No transactions yet. Add one from **Add spending** — rent, groceries, "
+        "No transactions yet. Add one from **Add spending**: rent, groceries, "
         "a fee, a salary. Only the date, a category and an amount are required."
     )
     st.stop()
@@ -40,7 +40,7 @@ with year_col:
 with currency_col:
     currency = Currency(
         st.selectbox("Currency", [c.value for c in Currency],
-                     format_func=lambda v: f"{Currency(v).flag}  {Currency(v).label}")
+                     format_func=lambda v: f"{Currency(v).symbol}  {Currency(v).label}")
     )
 with kind_col:
     which = st.selectbox("Showing", ["Everything", "Only spending", "Only income"])
@@ -56,8 +56,6 @@ if not chosen:
     st.info("Nothing matches those filters. Widen them and it comes back.")
     st.stop()
 
-st.divider()
-
 summary = spend.totals(chosen, currency)
 
 
@@ -66,13 +64,15 @@ def headline(amount: int) -> str:
     return f"{currency.symbol}{short}" if short else format_money(amount, currency)
 
 
-spent_col, earned_col, net_col, count_col = st.columns(4)
+with st.container(key="khata-figures"):
+    spent_col, earned_col, net_col, count_col = st.columns([1.8, 1.1, 1.1, 0.8])
 spent_col.metric("Spent", headline(summary.spent_minor))
 earned_col.metric("Earned", headline(summary.earned_minor))
 net_col.metric(
     "Net", headline(abs(summary.net_minor)),
     delta="in hand" if summary.net_minor >= 0 else "short",
     delta_color="normal" if summary.net_minor >= 0 else "inverse",
+    delta_arrow="off",
 )
 count_col.metric("Transactions", summary.count)
 
@@ -81,30 +81,24 @@ for slot, amount in ((spent_col, summary.spent_minor), (earned_col, summary.earn
     if compact(amount, currency):
         slot.caption(format_money(amount, currency))
 
-st.divider()
-
 table_col, chart_col = st.columns([1.3, 1], gap="large")
 
 with table_col:
     st.subheader("Where it went")
     buckets = spend.by_category(chosen, currency)
-    st.dataframe(
-        pd.DataFrame([
+    ruled_table(
+        [
             {
                 "Category": b["category"],
-                "Spent": b["spent_minor"] / 100,
-                "Earned": b["earned_minor"] / 100,
-                "In short": compact(b["spent_minor"], currency) or "—",
+                "Spent": format_money(b["spent_minor"], currency),
+                "Earned": format_money(b["earned_minor"], currency),
+                "In short": compact(b["spent_minor"], currency),
                 "Count": b["count"],
             }
             for b in buckets
-        ]),
-        hide_index=True,
-        width="stretch",
-        column_config={
-            "Spent": st.column_config.NumberColumn(format="%.2f"),
-            "Earned": st.column_config.NumberColumn(format="%.2f"),
-        },
+        ],
+        numeric=("Spent", "Earned", "In short", "Count"),
+        lead="Spent",
     )
     st.caption(f"Amounts in {currency.value}.")
 
@@ -118,15 +112,13 @@ with chart_col:
         st.info("Nothing spent in this selection.")
     else:
         st.altair_chart(
-            alt.Chart(frame).mark_bar().encode(
+            alt.Chart(frame).mark_bar(cornerRadiusEnd=4).encode(
                 x=alt.X("Amount:Q", title=f"Spent ({currency.symbol})"),
                 y=alt.Y("Category:N", sort="-x", title=None),
                 tooltip=["Category", alt.Tooltip("Amount:Q", format=",.2f")],
             ).properties(height=max(140, 38 * len(frame))),
             width="stretch",
         )
-
-st.divider()
 
 st.subheader("Every transaction")
 grouped = {}
@@ -137,7 +129,7 @@ for each_year in sorted(grouped, reverse=True):
     of_year = sorted(grouped[each_year], key=lambda t: (t.date, t.row or 0), reverse=True)
     spent = sum(t.amount_minor for t in of_year if t.kind is spend.Kind.spent)
     with st.expander(
-        f"{each_year} — {format_money(spent, currency)} spent · "
+        f"{each_year}: {format_money(spent, currency)} spent, "
         f"{len(of_year)} transaction{'s' if len(of_year) != 1 else ''}",
         expanded=(len(grouped) == 1),
     ):

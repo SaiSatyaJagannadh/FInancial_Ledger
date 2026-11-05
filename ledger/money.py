@@ -28,10 +28,6 @@ class Currency(str, enum.Enum):
         return {"INR": "Indian Rupees", "USD": "US Dollars"}[self.value]
 
     @property
-    def flag(self) -> str:
-        return {"INR": "🇮🇳", "USD": "🇺🇸"}[self.value]
-
-    @property
     def minor_name(self) -> str:
         return {"INR": "paise", "USD": "cents"}[self.value]
 
@@ -82,7 +78,10 @@ def to_minor(amount: str | int | float | Decimal) -> int:
         except InvalidOperation as exc:
             raise ValueError(f"not an amount: {amount!r}") from exc
 
-    return int((dec * MINOR).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    try:
+        return int((dec * MINOR).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    except (InvalidOperation, OverflowError) as exc:   # too many digits, inf, nan
+        raise ValueError(f"not an amount: {amount!r}") from exc
 
 
 def to_major(minor: int) -> Decimal:

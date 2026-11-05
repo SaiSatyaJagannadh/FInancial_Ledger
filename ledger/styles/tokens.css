@@ -1,0 +1,26 @@
+/* Hex, not OKLCH: .streamlit/config.toml cannot take OKLCH and these must match
+   it exactly. tests/test_theme.py fails if the two drift. */
+:root {
+  --space-3xs: 2px; --space-2xs: 4px; --space-xs: 8px; --space-sm: 12px; --space-md: 16px; --space-lg: 24px; --space-xl: 40px; --space-2xl: 64px; --space-3xl: 96px; --space-4xl: 144px;
+  --text-xs: 0.75rem; --text-sm: 0.875rem; --text-md: 1rem; --text-lg: 1.2rem; --text-xl: 1.44rem; --text-2xl: 1.728rem; --text-3xl: 2.074rem; --text-figure: 2.488rem;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); --ease-in: cubic-bezier(0.7, 0, 0.84, 0); --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms; --dur-short: 220ms; --dur-long: 420ms;
+  --container: 1152px; --gutter: 48px; --sidebar: 15rem;
+  /* Level with Streamlit's header, which comes first and so paints underneath,
+     and one below its sidebar, which then covers this on a phone when it opens. */
+  --z-over-header: 999990;
+
+  /* The page, and the two steps either side of it. */
+  --color-paper: #F7F6F2; --color-paper-2: #EDEBE3; --color-sheet: #FFFDF9;
+  /* The two inks. Out and back mean the direction of money and nothing else. */
+  --color-ink: #16202E; --color-ink-2: #3B4756; --color-muted: #5E6774;
+  --color-out: #B3261E; --color-back: #1B7A5A;
+  --color-rule: #DCD8CC; --color-edge: #8A8F96;
+  --color-accent: #1B3A5C; --color-accent-ink: #FFFDF9; --color-focus: #0B4FB0;
+  --color-selected: #E3E8EE;
+
+  --font-display: "Newsreader", Georgia, ui-serif, serif;
+  --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --radius-card: 4px;
+  --tracking-display: -0.015em;
+}

@@ -25,7 +25,7 @@ import time
 
 import streamlit as st
 
-from ledger.ui import INK, PAPER, RULE, SHADE   # the ledger's own colours, so
+from ledger.ui import styles   # the ledger's own colours, so
                                                 # the way in looks like the
                                                 # thing it leads to
 
@@ -76,13 +76,22 @@ def allowed_emails(secrets: dict | None = None) -> list[str] | None:
         return None
     if raw is None:
         return []                       # not set at all: unrestricted, and said so
+    if isinstance(raw, dict):
+        return None
+    blank_is_unreadable = isinstance(raw, str)
     if isinstance(raw, str):
         raw = [part.strip() for part in raw.replace(",", " ").split()]
     try:
         items = list(raw)               # a number, a bool, anything not iterable
     except TypeError:
         return None
-    return [str(item).strip().lower() for item in items if str(item).strip()]
+    kept = [str(item).strip().lower() for item in items if str(item).strip()]
+    # A value that was written but says nobody ("", [""], [" "]) is a list the
+    # owner meant and this code cannot honour: lock, do not open. Only an
+    # absent key or an explicit `[]` means unrestricted.
+    if not kept and (blank_is_unreadable or items):
+        return None
+    return kept
 
 
 def permitted(email: str, secrets: dict | None = None) -> bool:
@@ -182,8 +191,26 @@ def _unb64(text: str) -> bytes:
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
+def claim_for(email: str, password_hash: str, key: bytes) -> str:
+    """A keyed digest of the account's *current* password hash.
+
+    Carried in the token, so a password change (new hash) or a removed row
+    (no hash) makes every token issued before it fail the check in `_restore`.
+    """
+    return hmac.new(key, f"claim\0{email}\0{password_hash}".encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def token_claim(token: str) -> str:
+    """The claim inside a token. Only meaningful after `read_token` accepted it."""
+    try:
+        return str(json.loads(_unb64(str(token).split(".")[1])).get("c") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def make_token(email: str, name: str, key: bytes, *, now: float | None = None,
-               days: int = REMEMBER_DAYS) -> str:
+               days: int = REMEMBER_DAYS, claim: str = "") -> str:
     """A signed "this browser is <email>" note, good until it expires.
 
     The payload is readable by anybody holding the cookie — it is their own
@@ -194,7 +221,7 @@ def make_token(email: str, name: str, key: bytes, *, now: float | None = None,
         return ""
     now = time.time() if now is None else now
     body = _b64(json.dumps(
-        {"e": email, "n": name, "x": int(now + days * 86400)},
+        {"e": email, "n": name, "x": int(now + days * 86400), "c": claim},
         separators=(",", ":"),
     ).encode())
     return f"v1.{body}.{_b64(hmac.new(key, body.encode(), hashlib.sha256).digest())}"
@@ -257,6 +284,32 @@ def _write_cookie(value: str, seconds: int) -> None:
     components.html(_cookie_script(value, seconds), height=1)
 
 
+def _still_valid(email: str, claim: str, key: bytes) -> bool:
+    """Does the token's claim match the account's current password hash?
+
+    One users-tab read, made only when a *new* session is being restored (never
+    per rerun, so `signed_in_email` stays session-only). A token with no claim
+    predates this check and is refused once. A clean read that finds no row, or
+    a different hash, refuses. A read that fails keeps the person signed in:
+    a Google 503 must not sign anybody out.
+    ponytail: while the tab is unreadable a revoked token still restores;
+    that window is as long as the outage.
+    """
+    from ledger import accounts
+
+    if not claim:
+        return False
+    try:
+        known, problems = accounts.load()
+    except Exception:  # noqa: BLE001
+        return True
+    if not known and problems:          # load() reports a failed read this way
+        return True
+    account = accounts.find(email, known)
+    return bool(account) and hmac.compare_digest(
+        claim, claim_for(account.email, account.password_hash, key))
+
+
 def _restore() -> None:
     """Put a remembered sign-in back into this session, once per session.
 
@@ -274,7 +327,10 @@ def _restore() -> None:
         token = str(st.context.cookies.get(COOKIE) or "")
     except Exception:  # noqa: BLE001 — no runtime, no cookies
         return
-    email, name = read_token(token, _remember_key())
+    key = _remember_key()
+    email, name = read_token(token, key)
+    if email and not _still_valid(email, token_claim(token), key):
+        email = ""
     if email:
         st.session_state[SESSION] = email
         st.session_state[SESSION_NAME] = name or email
@@ -301,7 +357,8 @@ def signed_in_email() -> str:
     already trusted: this key is only ever set by a verified sign-in.
 
     The cost is that removing somebody from the sheet does not end a session
-    they already have. It ends when their browser tab does.
+    they already hold. It ends with the browser tab, and a remembered sign-in is
+    checked against the password hash once, when a new session is restored.
     """
     return str(st.session_state.get(SESSION) or "")
 
@@ -336,12 +393,12 @@ def signed_in_account():
 #: are `min(…, 100% - margin)` rather than fixed, type is `clamp()`ed, the
 #: buttons fill their width so they can be hit with a thumb, and the tab row
 #: wraps instead of scrolling a third tab out of sight.
-_AUTH_CSS = f"""
+_AUTH_CSS = """
 <style>
   [data-testid="stSidebar"],
   [data-testid="stSidebarNav"],
   [data-testid="stSidebarCollapsedControl"],
-  header[data-testid="stHeader"] {{ display: none !important; }}
+  header[data-testid="stHeader"] { display: none !important; }
 
   /* Centred in the window, not pinned to the top — a short card (the signed-out
      screen is four lines and a button) floating under a header-shaped gap looks
@@ -349,82 +406,68 @@ _AUTH_CSS = f"""
      `center`: when the card is taller than the phone it holds it, the top of an
      overflowing form would otherwise be scrolled off above the viewport and
      unreachable. */
-  .stMain {{ display: flex; justify-content: center; align-items: safe center; }}
+  .stMain { display: flex; justify-content: center; align-items: safe center; }
 
   /* The card. Padding scales with the viewport so a phone does not spend a
      third of its screen on the space above the mark. */
-  .block-container {{
+  .stMain .block-container {
       /* Against the viewport, not the parent: `100%` of a full-bleed parent is
          a card with its edges flush to both sides of a phone. */
       width: min(25rem, calc(100vw - 2rem));
       max-width: 25rem;
       margin: 1.25rem auto;
       padding: clamp(1.4rem, 5vw, 2.2rem) clamp(1.2rem, 5vw, 2rem) 1.4rem;
-      background: {PAPER};
-      border: 1px solid {RULE};
-      border-radius: 18px;
-      box-shadow: 0 1px 2px rgba(22, 32, 46, .04),
-                  0 14px 34px -22px rgba(22, 32, 46, .45);
-  }}
+      background: var(--color-sheet);
+      border: 1px solid var(--color-rule);
+      border-radius: var(--radius-card);
+  }
 
   /* The mark is a struck seal, not a stray character — ink block, cream glyph,
      the one place on the screen the ledger's own colour appears. */
-  .auth-mark {{
-      width: 42px; height: 42px; border-radius: 11px;
-      background: {INK}; color: {PAPER};
+  .auth-mark {
+      width: 42px; height: 42px; border-radius: var(--radius-card);
+      background: var(--color-ink); color: var(--color-sheet);
       display: flex; align-items: center; justify-content: center;
-      font-size: 1.32rem; font-weight: 600; line-height: 1;
+      font-family: var(--font-display); font-size: 1.32rem; font-weight: 600; line-height: 1;
       margin-bottom: .85rem;
-  }}
-  .auth-name {{
-      font-size: clamp(1.35rem, 5.5vw, 1.6rem); font-weight: 700;
-      letter-spacing: -0.02em; color: {INK}; margin: 0 0 .2rem 0;
+  }
+  .auth-name {
+      font-family: var(--font-display);
+      font-size: clamp(1.35rem, 5.5vw, 1.6rem); font-weight: 600;
+      letter-spacing: var(--tracking-display); color: var(--color-ink); margin: 0 0 .2rem 0;
       line-height: 1.15;
-  }}
-  .auth-sub {{
-      font-size: .9rem; opacity: .62; margin: 0 0 1.35rem 0; line-height: 1.5;
-  }}
+  }
+  .auth-sub {
+      font-size: .9rem; color: var(--color-muted); margin: 0 0 1.35rem 0; line-height: 1.5;
+  }
 
   /* The form is inside the card, so it draws no box of its own. */
-  div[data-testid="stForm"] {{
+  div[data-testid="stForm"] {
       border: 0; padding: 0; background: transparent;
-  }}
+  }
 
   /* Wrapping, not scrolling. A tab that has scrolled off the right of a narrow
      phone is a route nobody finds, and on this screen that route is the way
      back into a locked-out account. Addressed by ARIA role and testid rather
      than by Streamlit's generated class names, which change between releases. */
-  [role="tablist"] {{
+  [role="tablist"] {
       flex-wrap: wrap; gap: .2rem 1.1rem; overflow-x: visible;
       margin-bottom: .35rem;
-  }}
-  [data-testid="stTab"] {{ padding-left: 0; padding-right: 0; }}
-  [data-testid="stTab"] p {{ font-size: .9rem; font-weight: 600; }}
-
-  /* Fields read as fields: a hairline box on the card, not a grey slab. */
-  [data-testid="stTextInputRootElement"] {{
-      background: #FFFFFF; border: 1px solid {RULE}; border-radius: 10px;
-  }}
-  [data-testid="stTextInputRootElement"]:focus-within {{ border-color: {INK}; }}
-  .stTextInput label p {{ font-size: .85rem; font-weight: 600; opacity: .75; }}
-
-  /* Streamlit's alerts arrive in a blue that belongs to no other part of this
-     app. On paper they become a ruled note. */
-  [data-testid="stAlertContainer"] {{
-      background: {SHADE}; border-radius: 10px; border-left: 3px solid {INK};
-  }}
-  [data-testid="stAlert"] p {{ color: {INK}; font-size: .86rem; line-height: 1.5; }}
+  }
+  [data-testid="stTab"] { padding-left: 0; padding-right: 0; }
+  [data-testid="stTab"] p { font-size: .9rem; font-weight: 600; }
 
   /* 44px is the smallest thing a thumb reliably hits; these come out at 46. */
-  .stButton button, .stFormSubmitButton button {{
-      border-radius: 10px; font-weight: 600; padding: .68rem 1rem; width: 100%;
-  }}
+  .stButton button, .stFormSubmitButton button {
+      font-weight: 600; padding: .68rem 1rem; width: 100%;
+  }
 </style>
 """
 
 
 def _auth_chrome(sub: str = "") -> None:
     """Strip the app down to the screen in front of you, and head it."""
+    styles()    # the gate runs before any view has drawn the tokens this CSS reads
     st.markdown(_AUTH_CSS, unsafe_allow_html=True)
     st.markdown(
         '<div class="auth-mark">₹</div>'
@@ -453,6 +496,74 @@ def _signed_out_screen() -> None:
     st.stop()
 
 
+def _client() -> str:
+    try:
+        return st.context.ip_address or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+_SIGNUP = "signup_pending"     # a sign-up held until its emailed code is entered
+
+
+def _finish_signup(name: str, email: str, password: str) -> None:
+    from ledger import accounts
+    from ledger.models import EntryError
+
+    try:
+        made = accounts.create(name, email, password)
+    except EntryError as exc:
+        st.error(str(exc))
+        if "already an account" in str(exc):
+            st.info(
+                "If that account is yours and you have forgotten the "
+                "password, use the **Forgotten password** tab above."
+            )
+    except RuntimeError as exc:
+        st.error(str(exc))
+    except Exception as exc:  # noqa: BLE001 — say what the sheet said
+        st.error(f"Could not create the account: {exc}")
+    else:
+        # Registering is not signing in: the first typing of the password
+        # should be now, while it is still in mind.
+        st.session_state.pop(_SIGNUP, None)
+        st.session_state["account_created"] = True
+        st.session_state["account_created_email"] = made.email
+        st.rerun()
+
+
+def _signup_code_step(pending: dict) -> None:
+    """Hold the sign-up until the code mailed to the typed address is entered."""
+    from datetime import datetime
+    from hmac import compare_digest
+
+    from ledger import accounts
+
+    if datetime.now() > datetime.fromisoformat(pending["until"]):
+        st.session_state.pop(_SIGNUP, None)
+        st.warning("That code has expired. Start again.")
+        return
+    st.caption(f"We emailed a code to **{pending['email']}**.")
+    with st.form("signup_code_form"):
+        given = st.text_input("Code from your email", key="signup_mail_code")
+        ok = st.form_submit_button("Confirm", type="primary")
+        quit_ = st.form_submit_button("Cancel")
+    if quit_:
+        st.session_state.pop(_SIGNUP, None)
+        st.rerun()
+    if ok:
+        if compare_digest(str(given).strip().encode(), pending["code"].encode()):
+            _finish_signup(pending["name"], pending["email"], pending["password"])
+            return
+        pending["left"] -= 1
+        if pending["left"] <= 0:
+            st.session_state.pop(_SIGNUP, None)
+            st.error("Too many wrong codes. Start again.")
+        else:
+            st.session_state[_SIGNUP] = pending
+            st.error(f"That code is not right. {pending['left']} tries left.")
+
+
 def _password_gate() -> None:
     """Sign in or register against the `users` tab, then stop the page.
 
@@ -460,6 +571,8 @@ def _password_gate() -> None:
     reason the OIDC gate does: the router is the only way in, and a login that
     is itself a page is a login somebody can navigate around.
     """
+    from datetime import date, datetime, timedelta
+
     from ledger import accounts
     from ledger.models import EntryError
 
@@ -491,7 +604,7 @@ def _password_gate() -> None:
 
     if first_ever:
         st.info(
-            "No accounts yet. The first one created becomes yours — make it now, "
+            "No accounts yet. The first one created becomes yours, so make it now, "
             "before the app is shared with anybody."
         )
 
@@ -515,7 +628,7 @@ def _password_gate() -> None:
             submitted = st.form_submit_button("Sign in", type="primary",
                                               width="stretch")
         if submitted:
-            account = accounts.authenticate(email, password)
+            account = accounts.authenticate(email, password, client=_client())
             if account is None:
                 # One message for both causes. Saying which was wrong tells a
                 # stranger whether an address has an account here.
@@ -528,11 +641,16 @@ def _password_gate() -> None:
                 # Written to the browser on the next run — `st.rerun()` throws
                 # away whatever this one has drawn, the script included.
                 st.session_state[_PENDING] = make_token(
-                    account.email, account.name or account.email, _remember_key()
+                    account.email, account.name or account.email, _remember_key(),
+                    claim=claim_for(account.email, account.password_hash,
+                                    _remember_key()),
                 )
                 st.rerun()
 
     with sign_up:
+      if st.session_state.get(_SIGNUP):
+        _signup_code_step(st.session_state[_SIGNUP])
+      else:
         code_wanted = accounts.signup_code()
         if not code_wanted and not first_ever:
             st.warning(
@@ -555,32 +673,30 @@ def _password_gate() -> None:
 
         if registering:
             wrong = accounts.validate(name, new_email, new_password, confirm)
-            if code_wanted and code_given.strip() != code_wanted:
+            if code_wanted and not accounts.check_signup_word(code_given, code_wanted):
                 wrong.append("That sign-up code is not right.")
             for problem in wrong:
                 st.error(problem)
-            if not wrong:
-                try:
-                    made = accounts.create(name, new_email, new_password)
-                except EntryError as exc:
-                    st.error(str(exc))
-                    if "already an account" in str(exc):
-                        st.info(
-                            "If that account is yours and you have forgotten the "
-                            "password, use the **Forgotten password** tab above."
-                        )
-                except RuntimeError as exc:
-                    st.error(str(exc))
-                except Exception as exc:  # noqa: BLE001 — say what the sheet said
-                    st.error(f"Could not create the account: {exc}")
+            if not wrong and not accounts.settings_for_email_exists():
+                _finish_signup(name, new_email, new_password)
+            elif not wrong:
+                address = new_email.strip().lower()
+                if not accounts.mail_allowed("signup", address, _client()):
+                    st.error("Too many requests for that address. Try again later.")
                 else:
-                    # Registering is not signing in. Landing straight in the
-                    # app hides whether the password actually works — the first
-                    # time it gets typed should be now, while it is still in
-                    # mind, not on some later visit when it is not.
-                    st.session_state["account_created"] = True
-                    st.session_state["account_created_email"] = made.email
-                    st.rerun()
+                    code = accounts.reset_code()
+                    sent = accounts.send_reset_code(
+                        accounts.Account(address, name, "", date.today()), code, purpose="sign-up")
+                    if sent:
+                        st.error("Could not send the code. Try again later.")
+                    else:
+                        st.session_state[_SIGNUP] = {
+                            "name": name, "email": address, "password": new_password,
+                            "code": code, "left": accounts.RESET_ATTEMPTS,
+                            "until": (datetime.now() + timedelta(
+                                minutes=accounts.RESET_MINUTES)).isoformat(),
+                        }
+                        st.rerun()
 
     with forgot:
         _reset_form(known)
@@ -591,6 +707,9 @@ def _password_gate() -> None:
 #: Where a pending reset lives while somebody goes to read their email. Session
 #: state, so the code never touches the sheet and dies with the browser tab.
 _RESET = "reset_pending"
+
+
+_RESET_KEY = "\0reset:"      # accounts' process-wide wait table, one slot per address
 
 
 def _reset_form(known: list) -> None:
@@ -630,29 +749,32 @@ def _reset_form(known: list) -> None:
                 width="stretch",
             )
         if asked:
+            address = str(email or "").strip().lower()
             account = accounts.find(email, known)
-            if account is None:
-                # Same non-answer as a failed sign-in: saying "no such account"
-                # tells a stranger who is registered here.
-                st.success(
-                    "If that address has an account, a code is on its way to it."
-                    if can_email else
-                    "If that address has an account, you can set a new password now."
-                )
-            else:
-                code = accounts.reset_code()
-                problem = accounts.send_reset_code(account, code) if can_email else ""
-                if problem:
-                    st.error(f"Could not send the code: {problem}")
-                else:
-                    st.session_state[_RESET] = {
-                        "email": account.email,
-                        "code": code,
-                        "until": (datetime.now()
-                                  + timedelta(minutes=accounts.RESET_MINUTES)).isoformat(),
-                        "left": accounts.RESET_ATTEMPTS,
-                    }
-                    st.rerun()
+            if not accounts.mail_allowed("reset", address, _client()):
+                # Per address and client, so a stranger's repeats do not stop
+                # the real holder; the same answer whether or not it exists.
+                st.error("Too many requests for that address. Try again later.")
+                return
+            code = accounts.reset_code()
+            problem = ""
+            if account is not None and can_email:
+                problem = accounts.send_reset_code(account, code)
+            if problem:
+                st.error("Could not send the code. Try again later.")
+            elif address:
+                # An unknown address gets the same next screen as a real one,
+                # with a code nobody holds, so the screen says nothing about
+                # who has an account.
+                st.session_state[_RESET] = {
+                    "email": address,
+                    "code": code,
+                    "real": account is not None,
+                    "until": (datetime.now()
+                              + timedelta(minutes=accounts.RESET_MINUTES)).isoformat(),
+                    "left": accounts.RESET_ATTEMPTS,
+                }
+                st.rerun()
         return
 
     if datetime.now() > datetime.fromisoformat(pending["until"]):
@@ -679,8 +801,12 @@ def _reset_form(known: list) -> None:
         st.session_state.pop(_RESET, None)
         st.rerun()
     if changing:
-        wanted = pending["code"] if can_email else code_wanted
-        if not compare_digest(str(given).strip(), str(wanted)):
+        wanted = pending["code"] if can_email or not pending.get("real") else code_wanted
+        key = _RESET_KEY + pending["email"]
+        if accounts._wait_left(key):
+            st.error("Too many wrong codes for that address. Try again later.")
+        elif not compare_digest(str(given).strip().encode(), str(wanted).encode()):
+            accounts._note(key, False)
             pending["left"] -= 1
             if pending["left"] <= 0:
                 st.session_state.pop(_RESET, None)
@@ -692,6 +818,7 @@ def _reset_form(known: list) -> None:
             st.error("The two passwords do not match.")
         else:
             try:
+                accounts._note(key, True)
                 accounts.set_password(pending["email"], new)
             except (EntryError, RuntimeError) as exc:
                 st.error(str(exc))
@@ -701,6 +828,32 @@ def _reset_form(known: list) -> None:
                 st.session_state["account_created_email"] = pending["email"]
                 st.rerun()
 
+
+
+def _unusable_config() -> str:
+    """Why `[auth]` / `[accounts]` is present but cannot be used, or "" if fine.
+
+    "Absent" (no key, or an empty table) is not this: that is how the app runs
+    open on purpose.
+    """
+    secrets = _secrets()
+    auth_raw = secrets.get(SECTION)
+    try:
+        auth_table = dict(auth_raw) if auth_raw is not None else {}
+    except Exception:  # noqa: BLE001
+        return "`[auth]` in secrets is not a table, so the app is locked until it is fixed."
+    if auth_table:
+        return ("`[auth]` is present but incomplete (it needs `redirect_uri`, "
+                "`cookie_secret` and a provider), so the app is locked until "
+                "it is fixed or the section is removed.")
+    acc_raw = secrets.get("accounts")
+    try:
+        acc_table = dict(acc_raw) if acc_raw is not None else {}
+    except Exception:  # noqa: BLE001
+        return "`[accounts]` in secrets is not a table, so the app is locked until it is fixed."
+    if any(str(k).lower() == "enabled" and k != "enabled" for k in acc_table):
+        return "`[accounts]` needs a lower-case `enabled` key, so the app is locked until it is fixed."
+    return ""
 
 
 def gate() -> None:
@@ -716,6 +869,13 @@ def gate() -> None:
     from ledger import accounts
 
     if not configured():
+        # Absent means open (demo mode, the page tests). Present but unusable
+        # must not mean open: it is a lock the owner meant and typed wrongly.
+        broken = _unusable_config()
+        if broken:
+            _auth_chrome()
+            st.error(broken)
+            st.stop()
         if accounts.enabled():
             _password_gate()
         return

@@ -12,7 +12,7 @@ import streamlit as st
 
 from ledger import people as grouping
 from ledger.money import Currency, compact, format_money
-from ledger.ui import demo_banner, entry_table, load_ledger, styles
+from ledger.ui import demo_banner, entry_table, load_ledger, md_plain, styles
 
 ANYONE = "Everyone"
 ANY_YEAR = "All years"
@@ -24,7 +24,7 @@ result = load_ledger()
 demo_banner(result)
 
 st.title("Edit entries")
-st.caption("Find the row, then change or remove it. Deleting asks twice — the sheet row goes for good.")
+st.caption("Find the row, then change or remove it. Deleting asks twice, because the sheet row goes for good.")
 
 if not result.entries:
     st.info("Nothing recorded yet. Add an entry first.")
@@ -32,12 +32,12 @@ if not result.entries:
 
 # Grouping sits above the entry list on purpose: it is a setting you come
 # here to change, and it was unreachable below two hundred rows.
-with st.expander("👪  Group people together", expanded=False):
+with st.expander("Group people together", expanded=False, icon=":material/group:"):
     # A grouping is a fact about a person, not about a row, so it is set here
     # once rather than on each of their entries. Everything that rolls up follows.
     st.caption(
-        "When several people borrow under one arrangement — Chaitu and Sirisha "
-        "under Vihar — put them under that person here. Their entries stay their "
+        "When several people borrow under one arrangement, like Chaitu and Sirisha "
+        "under Vihar, put them under that person here. Their entries stay their "
         "own; only the totals roll up."
     )
 
@@ -47,9 +47,9 @@ with st.expander("👪  Group people together", expanded=False):
         st.warning(problem)
     parents = grouping.mapping(members)
 
-    NOBODY = "— on their own —"
+    NOBODY = "On their own"
 
-    who_col, under_col, set_col = st.columns([2, 2, 1])
+    who_col, under_col, set_col = st.columns([2, 2, 1], vertical_alignment="bottom")
     target = who_col.selectbox("Person", everyone, key="group_person")
     options = [NOBODY, *[p for p in everyone if p != target]]
     current = parents.get(target, "")
@@ -59,7 +59,6 @@ with st.expander("👪  Group people together", expanded=False):
         key="group_parent",
     )
     with set_col:
-        st.write("")
         if st.button("Save group", width="stretch"):
             try:
                 grouping.set_parent(target, "" if under == NOBODY else under)
@@ -80,17 +79,15 @@ with st.expander("👪  Group people together", expanded=False):
     if grouped:
         for head, names in grouped.items():
             others = [n for n in names if n != head]
-            st.markdown(f"- **{head}** — with {', '.join(others)}")
+            st.markdown(f"- **{md_plain(head)}**, with {md_plain(', '.join(others))}")
     else:
         st.caption("Nobody is grouped yet.")
-
-st.divider()
 
 currency = Currency(
     st.radio(
         "Currency",
         [c.value for c in Currency],
-        format_func=lambda v: f"{Currency(v).flag}  {Currency(v).label}",
+        format_func=lambda v: f"{Currency(v).symbol}  {Currency(v).label}",
         horizontal=True,
     )
 )
@@ -103,7 +100,7 @@ if not mine:
 people = sorted({e.person for e in mine})
 years = sorted({e.date.year for e in mine}, reverse=True)
 
-person_col, ledger_col, year_col = st.columns(3)
+person_col, ledger_col, year_col, search_col = st.columns([1.2, 1.2, 1, 2])
 with person_col:
     who = st.selectbox("Person", [ANYONE, *people])
 with ledger_col:
@@ -113,10 +110,11 @@ with ledger_col:
 with year_col:
     year = st.selectbox("Year", [ANY_YEAR, *years])
 
-search = st.text_input(
-    "Search", placeholder="Part of a note, a person, a ledger, or an amount",
-    help="Matches the note, the person, the ledger and the amount as typed.",
-)
+with search_col:
+    search = st.text_input(
+        "Search", placeholder="A note, a person, a ledger, an amount",
+        help="Matches the note, the person, the ledger and the amount as typed.",
+    )
 
 shown = mine
 if who != ANYONE:
@@ -135,25 +133,23 @@ if search.strip():
         or needle in f"{e.amount_minor / 100:.2f}"
     ]
 
-st.divider()
-
 if not shown:
     st.info("Nothing matches those filters. Widen them and the entries come back.")
     st.stop()
 
 total = sum(e.signed_minor for e in shown)
-count_col, net_col, oldest_col = st.columns(3)
-count_col.metric("Showing", f"{len(shown)} of {len(mine)}")
+with st.container(key="khata-figures"):
+    net_col, count_col, oldest_col = st.columns([1.8, 1, 1])
 short = compact(abs(total), currency)
 net_col.metric(
     "Net of these",
     f"{currency.symbol}{short}" if short else format_money(abs(total), currency),
     delta="owed to you" if total >= 0 else "you owe",
     delta_color="off",
+    delta_arrow="off",
 )
+count_col.metric("Showing", f"{len(shown)} of {len(mine)}")
 oldest_col.metric("Oldest", f"{min(e.date for e in shown):%b %Y}")
-
-st.divider()
 
 entry_table(
     sorted(shown, key=lambda e: (e.date, e.row or 0), reverse=True),

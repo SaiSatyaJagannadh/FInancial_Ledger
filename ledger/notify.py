@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import pathlib
 import smtplib
+import ssl
 import sys
 import threading
 from datetime import datetime
@@ -178,15 +179,14 @@ def _body(kind: str, action: str, before, after, columns: list[str],
 def _send(subject: str, body: str, config: dict) -> None:
     """Deliver one message. Called on a background thread; never raises."""
     global _LAST_ERROR
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = config["user"]
-    message["To"] = config["to"]
-    message.set_content(body)
-
     try:
+        message = EmailMessage()
+        message["Subject"] = subject
+        message["From"] = config["user"]
+        message["To"] = config["to"]
+        message.set_content(body)
         with smtplib.SMTP(config["host"], config["port"], timeout=TIMEOUT) as server:
-            server.starttls()
+            server.starttls(context=ssl.create_default_context())
             server.login(config["user"], config["password"])
             server.send_message(message)
     except Exception as exc:  # noqa: BLE001 — a notification must not escape
@@ -222,9 +222,9 @@ def changed(kind: str, action: str, *, before=None, after=None,
         return False
 
     if by is None:
-        from ledger import auth
+        from ledger import accounts
 
-        by = auth.current_user()
+        by = accounts.attribution()
 
     subject = _subject(kind, action, record)
     body = _body(kind, action, before, after, columns, by=by, redact=redact)
@@ -275,7 +275,7 @@ def demo() -> None:
     charge = lambda m, moved="": Charge(  # noqa: E731
         date=date(2026, 7, 1), person="Narayana", amount_minor=m, moved_to=moved)
     moved = describe(charge(15_000_00), charge(15_000_00, "Vihar"), ICOLUMNS)
-    assert moved == ["moved_to: — → Vihar"], moved
+    assert "moved_to: — → Vihar" in moved, moved   # a hand-on also moves `paid` and `kind`
 
     # Nothing configured means nothing sent, and no exception either.
     assert settings(None) is None

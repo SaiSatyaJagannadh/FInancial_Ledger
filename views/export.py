@@ -10,7 +10,7 @@ from ledger.compute import ALL_TIME, PERIODS, by_group as _by_group, filter_entr
 from ledger import people as grouping
 from ledger.export import email_link, summary_text, to_excel, to_pdf, whatsapp_link
 from ledger.money import Currency, format_money
-from ledger.ui import demo_banner, load_ledger, styles
+from ledger.ui import demo_banner, load_ledger, ruled_table, styles
 
 styles()
 
@@ -62,14 +62,13 @@ if not chosen:
     st.warning("Those filters leave nothing to download. Widen them and the buttons come back.")
     st.stop()
 
-st.divider()
-
-summary = st.columns(len(Currency) + 1)
+with st.container(key="khata-figures"):
+    summary = st.columns(len(Currency) + 1)
 summary[0].metric("Entries", len(chosen))
 for slot, unit in zip(summary[1:], Currency):
     subset = [e for e in chosen if e.currency is unit]
     net = sum(e.signed_minor for e in subset)
-    slot.metric(f"Net owed · {unit.value}", format_money(net, unit) if subset else "—")
+    slot.metric(f"Net owed, {unit.value}", format_money(net, unit) if subset else "None")
 
 # What the downloads will say about groups. Every exported row carries the
 # group it rolls up to and there is a Groups tab per currency, but none of that
@@ -82,10 +81,11 @@ _families = {
 }
 if _families:
     with st.expander(
-        f"👪  {len(_families)} group"
+        f"{len(_families)} group"
         + ("s" if len(_families) != 1 else "")
         + " included in these downloads",
         expanded=True,
+        icon=":material/group:",
     ):
         for _unit in Currency:
             _subset = [e for e in chosen if e.currency is _unit]
@@ -93,12 +93,18 @@ if _families:
             if not _rows:
                 continue
             st.markdown(f"**{_unit.label}**")
-            for _group in _rows:
-                _others = ", ".join(n for n in _group.people if n != _group.head)
-                st.markdown(
-                    f"- **{_group.head}** — {format_money(_group.net_minor, _unit)} "
-                    f"· with {_others}"
-                )
+            ruled_table(
+                [
+                    {
+                        "Group": _group.head,
+                        "Net owed": format_money(_group.net_minor, _unit),
+                        "With": ", ".join(n for n in _group.people if n != _group.head),
+                    }
+                    for _group in _rows
+                ],
+                numeric=("Net owed",),
+                lead="Net owed",
+            )
         st.caption(
             "Both files carry a Group column on every row, and the spreadsheet "
             "gets a Groups tab per currency."
@@ -108,8 +114,6 @@ else:
         "No groups set up. Put people under one another on **Edit entries** and "
         "the downloads will carry the arrangement too."
     )
-
-st.divider()
 
 stamp = f"{date.today():%Y-%m-%d}"
 excel_col, pdf_col = st.columns(2)
@@ -143,11 +147,9 @@ with pdf_col:
         width="stretch",
     )
 
-st.divider()
-
 st.subheader("Share")
 st.caption(
-    "WhatsApp and email links carry text, not files — neither can attach a "
+    "WhatsApp and email links carry text, not files, so neither can attach a "
     "document. This sends a written summary; to send the spreadsheet itself, "
     "download it first and attach it the usual way."
 )
@@ -156,11 +158,9 @@ shared = summary_text(chosen, parents=parents)
 st.text_area("What gets sent", value=shared, height=190, key="share_text")
 
 wa_col, mail_col = st.columns(2)
-wa_col.link_button("💬  Send on WhatsApp", whatsapp_link(shared), width="stretch")
-mail_col.link_button("✉️  Send by email", email_link(shared), width="stretch")
-st.caption("Both open with the message already written — pick the recipient there.")
-
-st.divider()
+wa_col.link_button("Send on WhatsApp", whatsapp_link(shared), icon=":material/chat:", width="stretch")
+mail_col.link_button("Send by email", email_link(shared), icon=":material/mail:", width="stretch")
+st.caption("Both open with the message already written. Pick the recipient there.")
 
 with st.expander("Where is my data kept?"):
     st.markdown(
@@ -179,14 +179,14 @@ service account own files in Drive without a paid Workspace account, so an
 uploaded file is stored inside the `attachments` tab and rebuilt when you open
 it. Open an entry and press **View / download** to get the original back.
 
-**GitHub holds the code only** — no entries, no amounts, no keys, no sheet
+**GitHub holds the code only:** no entries, no amounts, no keys, no sheet
 address. Your credentials live in Streamlit's encrypted secrets, never in the
 repository.
         """
     )
 
 with st.expander(f"Preview the {len(chosen)} rows going into these files"):
-    st.dataframe(
+    ruled_table(
         [
             {
                 "Date": f"{e.date:%d %b %Y}",
@@ -198,6 +198,5 @@ with st.expander(f"Preview the {len(chosen)} rows going into these files"):
             }
             for e in sorted(chosen, key=lambda x: (x.date, x.person))
         ],
-        hide_index=True,
-        width="stretch",
+        numeric=("Amount",),
     )

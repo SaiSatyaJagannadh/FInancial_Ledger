@@ -123,7 +123,7 @@ def record(kind: str, item, secrets: dict | None = None) -> None:
     broken archive means the row stays on the sheet instead of vanishing with
     no trace of it anywhere.
     """
-    from ledger import auth, store
+    from ledger import accounts, store
 
     secrets = store._secrets() if secrets is None else secrets
     if not store.is_configured(secrets):
@@ -132,7 +132,7 @@ def record(kind: str, item, secrets: dict | None = None) -> None:
     entry = Deletion(
         deleted_at=datetime.now(),
         kind=kind,
-        by=auth.current_user(),
+        by=accounts.attribution(),
         summary=summarise(item),
         source_row=getattr(item, "row", None),
         data=list(item.to_row()),
@@ -212,6 +212,11 @@ def restore(deletion: Deletion, secrets: dict | None = None):
     elif deletion.kind == CLEARANCE:
         clearance.add(record_, secrets)
     else:
+        held = interest.already_charged(interest.load(secrets)[0], record_.person,
+                                        record_.date, record_.currency)
+        if held:
+            raise EntryError(f"{record_.person} already has a charge for {held.month_label}; "
+                             "restoring this one would double the month.")
         interest.add(record_, secrets)
 
     _forget(deletion, secrets)
@@ -248,9 +253,14 @@ def _forget(deletion: Deletion, secrets: dict) -> None:
         return
     sheet = _sheet(secrets)
     cells = sheet.row_values(deletion.row)
-    if len(cells) < 2 or str(cells[1]).strip().lower() != deletion.kind:
+    try:
+        held = [str(c) for c in json.loads(cells[5])] if len(cells) > 5 else None
+    except ValueError:
+        held = None
+    if (len(cells) < 2 or str(cells[1]).strip().lower() != deletion.kind
+            or held != deletion.data):
         raise RuntimeError(
-            f"Archive row {deletion.row} no longer matches — the tab changed "
+            f"Archive row {deletion.row} no longer matches: the tab changed "
             "since it was loaded. Reload and try again."
         )
     store.delete_row(sheet, deletion.row)

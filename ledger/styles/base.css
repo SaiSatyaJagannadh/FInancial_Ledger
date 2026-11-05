@@ -1,0 +1,12 @@
+*, *::before, *::after { box-sizing: border-box; }
+html, body { overflow-x: clip; }
+html { scrollbar-color: var(--color-edge) var(--color-paper); }
+body { caret-color: var(--color-accent); -webkit-font-smoothing: antialiased; font-synthesis: none; }
+::selection { background: color-mix(in oklab, var(--color-accent) 22%, transparent); color: var(--color-ink); }
+:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+a { text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+h1, h2, h3 { overflow-wrap: break-word; min-width: 0; text-wrap: balance; }
+p { text-wrap: pretty; }
+@media (max-width: 60rem) { :root { --gutter: 24px; } }
+@media (max-width: 40rem) { :root { --gutter: 16px; } }
+@media (prefers-reduced-motion: reduce) { *:not(.keep-motion), *:not(.keep-motion)::before, *:not(.keep-motion)::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }

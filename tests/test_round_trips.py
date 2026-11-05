@@ -150,13 +150,13 @@ def test_a_delete_costs_a_guard_read_an_archive_and_the_delete(book):
     and to check the archive has a header. Warm, only the three that carry
     meaning: confirm the row is still the right one, archive it, remove it."""
     store.delete(entry(), CONFIGURED)
-    assert trips(book) == 6, book.calls
+    assert trips(book) == 7, book.calls
     assert "deleted.append_rows" in book.calls and "entries.delete_rows" in book.calls
 
     book.sheets["entries"].rows[9] = entry(row=9).to_row()
     book.calls.clear()
     store.delete(entry(row=9), CONFIGURED)
-    assert trips(book) == 3, book.calls
+    assert trips(book) == 4, book.calls   # +1: guard re-read after the archive write
     assert "fetch_sheet_metadata" not in book.calls
 
 
@@ -244,7 +244,7 @@ def test_deleting_several_rows_reopens_nothing(book):
 
     store.delete_many([entry(row=r) for r in (5, 6, 7, 8)], CONFIGURED)
     # Three trips a row — guard, archive, delete — and the tabs found once.
-    assert trips(book) <= 15, f"{trips(book)} trips: {book.calls}"
+    assert trips(book) <= 19, f"{trips(book)} trips: {book.calls}"
     assert book.calls.count("fetch_sheet_metadata") == 2, book.calls
 
 

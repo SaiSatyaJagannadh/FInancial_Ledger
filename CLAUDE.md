@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest -q                     # all tests (~845)
+.venv/bin/python -m pytest -q                     # all tests (~910)
 .venv/bin/python -m pytest tests/test_money.py -q  # one file
 .venv/bin/python -m pytest -q -k "settle"          # one pattern
 .venv/bin/python -m ledger.invest                  # one module's self-check
@@ -145,6 +145,13 @@ The amount in that check is compared **numerically, not as text**: Sheets
 returns `42` for what was written as `42.00`, so a string comparison passes
 against a test fake and fails against the real sheet.
 
+The guard also compares currency and note when the row has those cells (a
+narrower, older row is judged on what it has). `interest.set_for_month` refuses
+to write when the tab could not be read, keeps `moved_to`, `attachment` and
+`rate_percent` from the existing charge when the caller gives none, and
+`archive.restore` refuses an interest charge for a person and month that
+already has one.
+
 ### Speed: it is round trips, not rate limits
 
 Every operation is a run of **sequential** HTTPS calls to Google, and the count
@@ -160,8 +167,9 @@ nothing:
 So there are three caches, all in `store.py`: `_SHEETS` (tab handles),
 `_HEADERS` (headers known present) and `_ROWS` (tab contents, for
 `READ_SECONDS`). A tab read costs **2 trips cold and 0 warm**, an append 3 and
-1, a delete 6 and 3 — the warm three being the guard read, the archive and the
-removal, none of which can go. `tests/test_round_trips.py` counts these with a
+1, a delete 7 and 4 — the warm four being the guard read, the archive, a second
+guard read right before the removal (another session can shift rows during the
+archive write), and the removal, none of which can go. `tests/test_round_trips.py` counts these with a
 fake that charges for a metadata fetch exactly where gspread does, and fails if
 an operation starts costing more than it did — the regression that is otherwise
 invisible, because everything still works, just slower, for ever.
@@ -170,7 +178,9 @@ invisible, because everything still works, just slower, for ever.
 and `delete_row`. That is not tidiness — each one calls `forget_rows()`, so
 held rows can never outlive a change, and a call site that has to remember is
 one that will not. Do not call `worksheet.update` or `worksheet.delete_rows`
-directly; the tests check the doors, not the call sites. The retrying HTTP
+directly; the tests check the doors, not the call sites. `append_rows` and `write_cells`
+also prefix free text starting `=`, `+`, `-` or `@` (not plain numbers) with an
+apostrophe under `USER_ENTERED`, so Sheets stores it as text. The retrying HTTP
 client clears them too, on any non-GET, which catches anything that slips past.
 
 `store.ON_WRITE` carries the same news to `ui._cached_load`, registered by `ui`
@@ -346,7 +356,7 @@ NVIDIA's OpenAI-compatible endpoint over plain HTTP — no vendor SDK.
 
 `ledger/docs.py` turns an upload into either text (PDF/XLSX/CSV → the text
 model, which reads a table far better than a vision model reads a picture of
-one) or a right-sized image. Oversized photos are **shrunk, never refused**.
+one) or a right-sized image. Photos within the 10 MB upload limit (`server.maxUploadSize`) are **shrunk, never refused**; larger files never reach the app. Stored attachments keep their own 2 MB cap.
 
 ### Streamlit specifics that will bite
 
@@ -361,6 +371,41 @@ one) or a right-sized image. Oversized photos are **shrunk, never refused**.
   `ui.esc()`**, and any URL through `ui.safe_href()` (http/https only). Notes
   are free text and are also written by the model from uploaded documents.
 
+### The look (`design.md`, `ledger/styles/`)
+
+**`design.md` is the locked system; read it before changing how anything looks.**
+`ledger/styles/` holds `tokens.css`, `base.css` and `ledger.css`, read once at import
+and injected by `ui.styles()` through `st.html`, which takes no room on the page when it
+holds only a style tag. Streamlit draws its own widgets from `.streamlit/config.toml` and
+cannot read a CSS variable, so the colours live in both places, as hex, and
+`tests/test_theme.py` fails if they drift. It also fails if a chart series borrows the red
+or green of money. Faces were chosen for the rupee: check any replacement has a real `₹`
+glyph and equal-width digits, because several popular ones have no `₹` at all.
+
+**The stylesheet addresses `data-testid` and ARIA roles, and they change.** The radios
+became `stRadioOption` / `data-selected` somewhere after 1.49, which is why
+`requirements.txt` now floors Streamlit at 1.66. Anything unmatched just stops being
+styled, with no error, so look at the page after a Streamlit upgrade.
+
+**`stMarkdownContainer` has `margin-bottom: -1rem`.** It cancels the bottom margin of the
+paragraph Streamlit expects inside. Markup with no paragraph in it (a heading, a cell of
+a row) is then 16px shorter than what it holds, and the next thing lands on top of it:
+that was a rule through the descenders of every title. `ledger.css` zeroes it for
+headings and rows; a new keyed row container needs the same.
+
+**On a phone Streamlit stacks every column to full width**, so one entry became seven
+lines with its amount on the third. Each kind of row is laid out by its column's place
+in the row, under the `khata-rows-entry` / `-spend` / `-clear` / `-charge` / `-line` container keys.
+Adding or reordering a column in a row means changing that grid as well.
+
+**`ui.ruled_table` replaced `st.dataframe` wherever a person reads a table.** A dataframe
+is drawn on a canvas: it cannot take the page's type and scrolls sideways on a phone with
+the figures out of sight. The cost is its click-to-sort and CSV button. Every cell goes
+through `esc()` inside `table_html`, which is pure and tested.
+
+**To see what demo mode hides, number the rows.** Demo entries have `row=None`, so they
+never draw Edit, Delete or a tick box; a screenshot of demo mode says nothing about them.
+
 ### Attachments live in the sheet, not Drive
 
 A service account has no Drive storage quota, and sharing a folder with it does
@@ -374,9 +419,12 @@ matching rows: reading the whole tab would pull every stored file to serve one.
 
 Secrets are Streamlit's encrypted store (`.streamlit/secrets.toml` locally,
 gitignored). `ledger/ui.py::home_button()` is drawn by the router, so it is on every page
-and no page can forget it. It sits **below** Streamlit's own header rather than
-in it: that header is opaque at `z-index: 999990`, so the first version was on
-the page, correctly positioned, and invisible. Clicking it drops the cached
+and no page can forget it. It sits **in the strip above the page**, beside the sidebar,
+so it can never lie on top of a row while the page scrolls under it. Its z-index matches
+Streamlit's opaque header (`999990`), which comes first in the DOM and so paints
+underneath, and stays one below the sidebar, which covers it when opened on a phone.
+It avoids the right-hand edge because Streamlit Cloud draws its own toolbar there.
+Clicking it drops the cached
 sheet read and `switch_page`s to the Ledger — fresh figures without reloading
 the *page*, which is the distinction that matters, because a browser refresh is
 the thing that used to end the session.
@@ -408,7 +456,7 @@ server_metadata_url = "https://accounts.google.com/.well-known/openid-configurat
 allowed = ["you@gmail.com", "someone@gmail.com"]   # empty list = anyone Google verifies
 ```
 
-**Absent `[auth]` means the app runs open, exactly as before.** `st.user` raises
+**Absent `[auth]` means the app runs open, exactly as before; present but unusable locks.** A half-filled `[auth]`, a non-table `[auth]`/`[accounts]`, a wrong-case `Enabled` key, or a blank `allowed` (`""`, `[""]`, `{}`) stops the page with a message (`auth._unusable_config`, `allowed_emails` returning None). Only an absent key or an explicit `allowed = []` is unrestricted. `st.user` raises
 without that section, so `auth.configured()` is checked first and every helper
 answers "nobody" rather than throwing — which is what keeps demo mode and
 `tests/test_pages.py` (which run views directly, not through the router)
@@ -426,11 +474,22 @@ user, `hmac.compare_digest` for the comparison, and one message for both
 account). An unknown address still costs a hash so the two answers take the
 same time.
 
+**Sign-up proves the address when `[notify]` is set**: the same six-digit code
+(`reset_code`, fifteen minutes, five guesses, session state only) is mailed to the
+typed address and no row is written until it is right. Without `[notify]` sign-up
+is as before, and change notices and the archive's `by` mark a password signer
+`(unverified)` (`accounts.attribution`). Mailed codes are limited per address
+plus client IP (`accounts.mail_allowed`), with a separate ceiling of
+`MAIL_CEILING` per address, so a stranger's repeats do not stop the real holder.
+
 **Forgotten passwords** go through a third tab on the same gate. A six-digit
 code is emailed to *the address on the account* — never one typed into the form
 — reusing the `[notify]` SMTP settings, so it needs no config of its own. The
 code lives in session state and dies with the browser tab; it never reaches the
-sheet. Fifteen minutes, five guesses, `compare_digest`. With no `[notify]` the
+sheet. Fifteen minutes, five guesses, `compare_digest`. Failed sign-ins earn a growing wait keyed by address **plus client IP** (`st.context.ip_address`, passed into `accounts.authenticate`); with no IP it falls back to the address alone. An unknown address reaches the
+same code screen as a real one (with a code nobody holds), a send failure shows a
+fixed message, and requests and wrong codes count per normalised address in the
+process-wide wait table, so a new browser session does not reset them. With no `[notify]` the
 shared `signup_code` is accepted instead, which is weaker (everyone who can
 register knows it) but is the difference between a locked-out household and a
 sheet edit. With neither, the page says to delete the row from the `users` tab.
@@ -461,6 +520,16 @@ gate decides. Three things about it are load-bearing:
   run; `_sign_out` sets the `_RESTORED` latch so `_restore` cannot put it back
   before the browser has been told to drop it.
 
+The token carries an HMAC claim over the account's current password hash
+(`claim_for`). `_restore` checks it with one `users` read, for a new session only:
+a password change or a removed row ends the remembered sign-in, and a token with
+no claim is refused. If the tab cannot be read the person stays signed in, since a
+503 must not sign anyone out; a revoked token therefore still works during an outage.
+
+Failed sign-ins (per normalised address) and sign-up words (once) earn a growing
+wait in process-wide state (`accounts.authenticate`, `check_signup_word`), checked
+before any hash. It is a wait, not a lock, so a stranger cannot lock the owner out.
+
 Its ceiling: the cookie is not `HttpOnly` — it cannot be, since JavaScript is
 what sets it — so anything that achieves script execution on the page can read
 it. That is why every interpolation still goes through `ui.esc()`.
@@ -475,7 +544,7 @@ archive, delete and notify all go out, and this was the very next read. The
 display name is stored beside the address at sign-in for the same reason.
 Nothing is trusted that was not already trusted — only a verified sign-in sets
 that key — and the cost is that removing somebody from the sheet does not end a
-session they already hold. `tests/test_auth_gate.py` fails if a sheet read
+session they already hold in an open tab (a remembered sign-in is checked once, in `_restore`). `tests/test_auth_gate.py` fails if a sheet read
 creeps back in.
 
 **The gate is the whole screen while it is up** (`auth._auth_chrome`). It hides
@@ -565,6 +634,9 @@ two notices. Both are true; the second reads `moved_to: — → Vihar`.
 - PDF exports print `INR`/`USD` rather than `₹` — fpdf's core fonts are
   latin-1 and the glyph raises.
 - NVIDIA's endpoint has no speech-to-text, so there is no voice input.
+- Sheets turns number-shaped text into a number before storing it, so a note of
+  `+919876543210`, `007` or `2.50` reads back as `919876543210`, `7` or `2.5`. Checked on
+  the real sheet; the row guard still accepts all three.
 - The repo is public and indexed at
   [deepwiki.com/SaiSatyaJagannadh/FInancial_Ledger](https://deepwiki.com/SaiSatyaJagannadh/FInancial_Ledger),
   which regenerates from `README.md` and this file on a push. A stale claim in

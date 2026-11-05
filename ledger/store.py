@@ -7,13 +7,14 @@ wire up a sheet.
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass
 
 from ledger.demo import build_demo_entries
 from ledger.models import COLUMNS, Entry, EntryError, parse_date, parse_direction
-from ledger.money import to_minor
+from ledger.money import parse_currency, to_minor
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -417,7 +418,7 @@ def _why(exc: Exception) -> str:
     if code in RETRY_CODES:
         return (
             f"Google Sheets answered {code} on all {len(RETRY_WAITS) + 1} attempts. "
-            "That is Google's own service, not your sheet and not your data — it "
+            "That is Google's own service, not your sheet and not your data: it "
             "usually clears within a minute."
         )
     if code in (401, 403):
@@ -450,6 +451,25 @@ def _why(exc: Exception) -> str:
 INSERT_ROWS = "INSERT_ROWS"
 
 
+_NUMBERISH = re.compile(r"[+-]?(\d[\d,]*\.?\d*|\.\d+)")
+
+
+def _as_text(rows: list[list]) -> list[list]:
+    """Stop free text being run as a formula by USER_ENTERED.
+
+    A cell starting =, +, - or @ that is not a plain number gets a leading
+    apostrophe, which Sheets reads as "this is text" and does not show or
+    return, so reads see the original. Numbers (a "-5.00" amount) pass as-is.
+    """
+    def safe(cell):
+        if (isinstance(cell, str) and cell[:1] in ("=", "+", "-", "@")
+                and not _NUMBERISH.fullmatch(cell)):
+            return "'" + cell
+        return cell
+
+    return [[safe(c) for c in row] for row in rows]
+
+
 def append_rows(worksheet, rows: list[list], value_input_option: str = "USER_ENTERED") -> None:
     """Add rows to a tab without ever writing over one already there.
 
@@ -459,6 +479,8 @@ def append_rows(worksheet, rows: list[list], value_input_option: str = "USER_ENT
     that silently loses somebody's record, and a call site that forgets is a
     row nobody gets back. Do not call `append_row` directly.
     """
+    if value_input_option == "USER_ENTERED":
+        rows = _as_text(rows)
     worksheet.append_rows(
         rows,
         value_input_option=value_input_option,
@@ -480,6 +502,8 @@ def write_cells(worksheet, values: list[list], range_name: str,
     — gspread 6 reordered `update` to (values, range_name), so a positional
     call writes the range *as the values*.
     """
+    if value_input_option == "USER_ENTERED":
+        values = _as_text(values)
     if value_input_option is None:
         worksheet.update(values=values, range_name=range_name)
     else:
@@ -525,7 +549,7 @@ def delete(entry: Entry, secrets: dict | None = None) -> None:
     current = worksheet.row_values(entry.row)
     if not _same_entry(current, entry):
         raise RuntimeError(
-            f"Row {entry.row} no longer matches this entry — the sheet changed "
+            f"Row {entry.row} no longer matches this entry: the sheet changed "
             "since it was loaded. Reload and try again."
         )
     # Archived *before* the row goes, and a failure here stops the deletion:
@@ -535,6 +559,13 @@ def delete(entry: Entry, secrets: dict | None = None) -> None:
     from ledger import archive
 
     archive.record(archive.ENTRY, entry, secrets)
+    # The archive write is a round trip in which another session can shift the
+    # rows, so confirm again immediately before the removal.
+    if not _same_entry(worksheet.row_values(entry.row), entry):
+        raise RuntimeError(
+            f"Row {entry.row} changed while it was being archived. Reload and "
+            "try again."
+        )
     delete_row(worksheet, entry.row)
     _announce("Ledger entry", "deleted", before=entry, secrets=secrets)
 
@@ -585,7 +616,7 @@ def update(original: Entry, edited: Entry, secrets: dict | None = None) -> None:
     worksheet = _open_worksheet(secrets)
     if not _same_entry(worksheet.row_values(original.row), original):
         raise RuntimeError(
-            f"Row {original.row} no longer matches this entry — the sheet changed "
+            f"Row {original.row} no longer matches this entry: the sheet changed "
             "since it was loaded. Reload and try again."
         )
     row = edited.to_row()
@@ -621,6 +652,17 @@ def _column_letter(index: int) -> str:
     return letters
 
 
+def _same_note(cell: str, note: str) -> bool:
+    """Text match, or the same number: Sheets turns a note like 2.50 into 2.5."""
+    cell = str(cell).strip()
+    if cell == note:
+        return True
+    try:
+        return float(cell.replace(",", "")) == float(note.replace(",", ""))
+    except ValueError:
+        return False
+
+
 def _same_entry(cells: list[str], entry: Entry) -> bool:
     """Does this raw sheet row still describe `entry`?
 
@@ -642,6 +684,9 @@ def _same_entry(cells: list[str], entry: Entry) -> bool:
         and cells[2].strip() == entry.ledger
         and direction_matches
         and amount_matches
+        # A narrower (older) row has no such cell; only compare what is there.
+        and (len(cells) < 6 or parse_currency(cells[5]) is entry.currency)
+        and (len(cells) < 7 or _same_note(cells[6], entry.note))
     )
 
 
@@ -661,7 +706,7 @@ def upload_attachment(
             "Attachments need a Drive folder. Two steps, both one-off:\n\n"
             "1. In Google Drive, make a folder and share it with "
             f"**{account}** as **Editor**.\n"
-            "2. Add its id — the last part of the folder's URL — to your "
+            "2. Add its id (the last part of the folder's URL) to your "
             "Streamlit secrets, above every [section] heading:\n\n"
             "```toml\n[drive]\nfolder_id = \"...\"\n```"
         )
@@ -702,7 +747,7 @@ def upload_attachment(
             f"Drive cannot see folder {folder}. Open it in Drive, press Share, "
             f"and add **{account}** as **Editor**. A service account has no "
             "storage of its own, so it can only write into a folder you share "
-            "with it — there is no way around this step."
+            "with it. There is no way around this step."
         )
     if response.status_code == 403 and "storage quota" in response.text:
         raise RuntimeError(

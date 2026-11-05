@@ -26,15 +26,23 @@ from ledger.ui import home_button  # noqa: E402 — must follow set_page_config
 
 home_button()
 
-st.navigation([
-    st.Page("views/dashboard.py", title="Ledger", icon=":material/menu_book:", default=True),
-    st.Page("views/add_entry.py", title="Add entry", icon=":material/add:"),
-    st.Page("views/edit_entries.py", title="Edit entries", icon=":material/edit_note:"),
-    st.Page("views/interest.py", title="Interest", icon=":material/percent:"),
-    st.Page("views/assistant.py", title="Assistant", icon=":material/forum:"),
-    st.Page("views/spending.py", title="Spending", icon=":material/receipt_long:"),
-    st.Page("views/add_spending.py", title="Add spending", icon=":material/add_card:"),
-    st.Page("views/clearance.py", title="Debt clearance", icon=":material/handshake:"),
-    st.Page("views/deleted.py", title="Deleted", icon=":material/restore_from_trash:"),
-    st.Page("views/export.py", title="Download", icon=":material/download:"),
-]).run()
+# Grouped by what is summed with what. "Kept apart" is the point of those four:
+# none of them is ever added into the ledger's figures.
+st.navigation({
+    "Ledger": [
+        st.Page("views/dashboard.py", title="Ledger", icon=":material/menu_book:", default=True),
+        st.Page("views/add_entry.py", title="Add entry", icon=":material/add:"),
+        st.Page("views/edit_entries.py", title="Edit entries", icon=":material/edit_note:"),
+    ],
+    "Kept apart": [
+        st.Page("views/interest.py", title="Interest", icon=":material/percent:"),
+        st.Page("views/clearance.py", title="Debt clearance", icon=":material/handshake:"),
+        st.Page("views/spending.py", title="Spending", icon=":material/receipt_long:"),
+        st.Page("views/add_spending.py", title="Add spending", icon=":material/add_card:"),
+    ],
+    "Tools": [
+        st.Page("views/assistant.py", title="Assistant", icon=":material/forum:"),
+        st.Page("views/export.py", title="Download", icon=":material/download:"),
+        st.Page("views/deleted.py", title="Deleted", icon=":material/restore_from_trash:"),
+    ],
+}, expanded=True).run()

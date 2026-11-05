@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import html
+import re
+from pathlib import Path
 
 import streamlit as st
 
@@ -25,6 +27,20 @@ def esc(value) -> str:
     return html.escape(str(value or ""), quote=True)
 
 
+def esc_line(value) -> str:
+    """`esc` for a note shown in one line of markup: newlines collapsed first."""
+    return esc(" ".join(str(value or "").split()))
+
+
+def md_plain(value) -> str:
+    """Free text for a plain-Markdown sink (a label, caption or chat reply).
+
+    Escapes only what makes an image or a link, `[`, `]` and `<`, so a name or
+    punctuation reads as typed while `![x](http://tracker)` stays text.
+    """
+    return re.sub(r"([\[\]<])", r"\\\1", str(value or ""))
+
+
 def safe_href(url: str) -> str:
     """The URL if it is safe to link to, otherwise empty.
 
@@ -32,6 +48,8 @@ def safe_href(url: str) -> str:
     no legitimate reason for a statement link to be a javascript: or data: URI.
     """
     cleaned = str(url or "").strip()
+    if re.search(r"""[\s"'<>`\\\x00-\x1f\x7f]""", cleaned):
+        return ""                     # would break out of an href="..." attribute
     return cleaned if cleaned.lower().startswith(SAFE_SCHEMES) else ""
 
 CACHE_SECONDS = 60
@@ -121,7 +139,7 @@ def demo_banner(result: store.LoadResult) -> None:
     having to work out what to render with no data.
     """
     if result.unreachable:
-        st.error(f"**Google Sheets did not answer** — {result.detail}")
+        st.error(f"**Google Sheets did not answer.** {result.detail}")
         again, _ = st.columns([1, 3])
         if again.button("Try again", type="primary", width="stretch"):
             clear_cache()
@@ -135,16 +153,16 @@ def demo_banner(result: store.LoadResult) -> None:
 
     if not result.demo:
         if result.problems:
-            with st.expander(f"⚠️ {len(result.problems)} row(s) could not be read"):
+            with st.expander(f"{len(result.problems)} row(s) could not be read", icon=":material/warning:"):
                 for problem in result.problems:
                     st.write(f"- {problem}")
         _notify_health()
         return
 
     st.warning(
-        "**Demo mode** — showing sample data. Add your credentials to "
+        "**Demo mode:** showing sample data. Add your credentials to "
         "`.streamlit/secrets.toml` to connect your real Google Sheet.",
-        icon="⚠️",
+        icon=":material/warning:",
     )
 
 
@@ -161,7 +179,7 @@ def _notify_health() -> None:
     problem = notify.last_error()
     if problem:
         st.caption(
-            f"✉️ Change emails are not going out — {esc(problem)}. "
+            f"Change emails are not going out: {esc(problem)}. "
             "Your entries are saved; only the notification failed."
         )
 
@@ -171,87 +189,25 @@ def page_config(title: str) -> None:
 
 
 #: A khata is ruled in two inks, and which ink a figure is written in *is* its
-#: direction. Colour carries that meaning here and nothing else, so it is never
-#: spent on decoration.
-INK = "#16202E"
-OUT = "#B3261E"   # money out, to them
-BACK = "#1B7A5A"  # money back, from them
-RULE = "#DCD8CC"
-#: The two grounds, matching `.streamlit/config.toml` — the page it is written
-#: on, and the tint used for a note on it. Named here so a screen that draws its
-#: own surfaces (the sign-in card) cannot drift away from the theme by a shade.
-PAPER = "#FFFDF9"
-SHADE = "#EDEBE3"
-
-_CSS = f"""
-<style>
-  /* Figures are the thing you actually read on a ledger, so they get tabular
-     numerals: columns of digits that line up instead of shimmying. */
-  [data-testid="stMetricValue"], .khata-amount, .khata-row td {{
-      font-variant-numeric: tabular-nums;
-      font-feature-settings: "tnum" 1;
-  }}
-  [data-testid="stMetricValue"] {{ letter-spacing: -0.02em; }}
-
-  .khata-row {{
-      display: flex; align-items: baseline; gap: .6rem;
-      padding: .1rem 0 .35rem 0;
-  }}
-  .khata-amount {{ font-size: 1.12rem; font-weight: 700; letter-spacing: -0.01em; }}
-  .khata-out  {{ color: {OUT}; }}
-  .khata-back {{ color: {BACK}; }}
-  .khata-who  {{ font-size: 1.02rem; font-weight: 600; color: {INK}; }}
-  .khata-meta {{ font-size: .82rem; opacity: .62; }}
-  .khata-src  {{ font-style: italic; opacity: .8; }}
-  .khata-head {{
-      font-size: .72rem; letter-spacing: .09em; text-transform: uppercase;
-      opacity: .55; font-weight: 600;
-  }}
-  .khata-cell {{ line-height: 1.35; padding: .1rem 0; }}
-  .khata-cell.khata-amount {{ font-size: 1.02rem; }}
-  .khata-rule-head {{ border-top-color: {INK}; opacity: .35; margin-bottom: .1rem; }}
-  .khata-dir  {{ font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; opacity: .55; }}
-
-  /* The ruled line is the signature. One hairline per entry, like the page of
-     a real khata — no cards, no shadows, no borders boxing every row in. */
-  .khata-rule {{ border: 0; border-top: 1px solid {RULE}; margin: .1rem 0 .55rem 0; }}
-
-  /* Readability: the default line length runs long on a wide screen. */
-  .block-container p, .block-container li {{ max-width: 68ch; }}
-</style>
-"""
+#: direction. The inks are defined in `styles/tokens.css` and the widgets take
+#: theirs from `.streamlit/config.toml`; `tests/test_theme.py` holds the two
+#: together. Read once at import, because this runs on every rerun of every page,
+#: and with the comments and imports taken out, because they are for whoever edits
+#: these files and every byte goes down the websocket again on each rerun.
+_CSS = "<style>" + re.sub(
+    r"/\*.*?\*/|@import[^;]+;", "",
+    "\n".join(
+        (Path(__file__).parent / "styles" / name).read_text(encoding="utf-8")
+        for name in ("tokens.css", "base.css", "ledger.css")
+    ),
+    flags=re.DOTALL,
+) + "</style>"
 
 
 def styles() -> None:
-    """Inject the shared look. Cheap enough to call on every page."""
-    st.markdown(_CSS, unsafe_allow_html=True)
-
-
-#: The home control sits top right, *below* Streamlit's own header rather than
-#: inside it. The header is opaque and sits at z-index 999990, so anything
-#: sharing that strip is simply painted over — the first version of this was
-#: on the page, correctly positioned, and invisible. Below it there is nothing
-#: to fight: the band above the title is empty on every page.
-#:
-#: Fixed rather than in the flow, because the router draws it once and every
-#: page then scrolls underneath it. Opaque, for the same reason.
-_HOME_CSS = f"""
-<style>
-  .st-key-khata-home {{
-      position: fixed; top: 4.1rem; right: 1.1rem; z-index: 999991; width: auto;
-  }}
-  .st-key-khata-home .stButton button {{
-      padding: .2rem .7rem; border-radius: 9px; font-weight: 600;
-      font-size: .82rem; min-height: 0; line-height: 1.7;
-      background: {PAPER}; color: {INK}; border: 1px solid {RULE};
-      box-shadow: 0 1px 2px rgba(22, 32, 46, .06);
-  }}
-  .st-key-khata-home .stButton button:hover {{ border-color: {INK}; color: {INK}; }}
-  @media (max-width: 640px) {{
-      .st-key-khata-home {{ top: 3.6rem; right: .6rem; }}
-  }}
-</style>
-"""
+    """Inject the shared look. `st.html` holding only a style tag takes no room
+    on the page, where `st.markdown` would leave a gap above the title."""
+    st.html(_CSS)
 
 
 def home_button(target: str = "views/dashboard.py") -> None:
@@ -262,9 +218,8 @@ def home_button(target: str = "views/dashboard.py") -> None:
     the point — a browser refresh throws away the Streamlit session, and going
     back for fresh numbers should never be the same gesture as signing out.
     """
-    st.markdown(_HOME_CSS, unsafe_allow_html=True)
     with st.container(key="khata-home"):
-        if st.button("⌂  Home", key="khata_home_button",
+        if st.button("Home", key="khata_home_button", icon=":material/home:", type="tertiary",
                      help="Back to the Ledger with fresh figures. Does not sign you out."):
             clear_cache()
             st.switch_page(target)
@@ -301,7 +256,7 @@ def attachment_field(entry, key: str = "edit"):
         # file, and a rerun inside a dialog dismisses it — taking every field
         # the person had just typed with it. The row in the list below previews
         # it perfectly well, and that is one click away.
-        st.caption("📎 A file is attached, kept inside the sheet. Open it from the list.")
+        st.caption("A file is attached, kept inside the sheet. Open it from the list.")
         if st.checkbox("Remove this attachment", key=f"{key}drop_{entry.row}"):
             kept = ""
     else:
@@ -322,7 +277,7 @@ def attachment_field(entry, key: str = "edit"):
     return kept, upload
 
 
-@st.dialog("Edit entry")
+@st.dialog("Edit entry", width="medium")
 def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
     """Change any field of an existing entry, then write it back to its row."""
     from dataclasses import replace
@@ -352,7 +307,7 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
 
     currency = st.radio(
         "Currency", list(Currency), index=list(Currency).index(entry.currency),
-        format_func=lambda c: f"{c.flag}  {c.label}", horizontal=True,
+        format_func=lambda c: f"{c.symbol}  {c.label}", horizontal=True,
     )
     note = st.text_input("Note", value=entry.note)
     attachment, upload = attachment_field(entry)
@@ -362,7 +317,7 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
     try:
         minor = to_minor(amount)
         if minor <= 0:
-            problems.append("Amount must be more than zero — Direction says which way it goes.")
+            problems.append("Amount must be more than zero. Direction says which way it goes.")
         else:
             edited = replace(
                 entry, date=when, person=person.strip(), ledger=ledger_name.strip(),
@@ -393,7 +348,7 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
             f"You have changed this from *{_DIRECTION_WORDS[entry.direction]}* to "
             f"*{_DIRECTION_WORDS[edited.direction]}*.\n\n"
             "**Add as a new entry** keeps this row and records the other half "
-            "beside it — which is what a repayment is. **Save changes** replaces "
+            "beside it, which is what a repayment is. **Save changes** replaces "
             "this row, so the original is gone for good."
         )
 
@@ -428,8 +383,8 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
             clear_cache()
             st.session_state.pop(stored, None)
             st.session_state["just_edited"] = (
-                f"{edited.person} · {edited.date:%d %b %Y}"
-                + (" — added beside the original" if append_instead else "")
+                f"{edited.person}, {edited.date:%d %b %Y}"
+                + (", added beside the original" if append_instead else "")
             )
             st.rerun()
 
@@ -437,7 +392,7 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
     # Which one leads is said in colour, never by moving them under the cursor:
     # the new button appends without undo, and a habit-click on a row somebody
     # only opened to read would have doubled their balance.
-    save, add, cancel = st.columns(3)
+    save, add, cancel = st.columns([1.2, 1.4, 1])
     if save.button("Save changes", type="secondary" if flipped else "primary",
                    width="stretch", disabled=edited is None or unchanged,
                    help="Replaces this row. The original is not recoverable."):
@@ -455,7 +410,7 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
 def edit_control(entry, scope: str, people: list[str], ledgers: list[str]) -> None:
     if entry.row is None:
         return
-    if st.button("Edit", key=f"edit_{scope}_{entry.row}",
+    if st.button("Edit", key=f"edit_{scope}_{entry.row}", type="tertiary",
                  help="Change this entry", width="stretch"):
         _edit_dialog(entry, people, ledgers)
 
@@ -473,11 +428,14 @@ def delete_control(entry, scope: str) -> bool:
     if entry.row is None:
         return False
     armed = f"arm_{scope}_{entry.row}"
+    # Armed for this record, not for a row number: rows shift under another
+    # session's delete, and the same number would then name a stranger.
+    who = tuple(entry.to_row())
 
-    if not st.session_state.get(armed):
-        if st.button("Delete", key=f"del_{scope}_{entry.row}",
+    if st.session_state.get(armed) != who:
+        if st.button("Delete", key=f"del_{scope}_{entry.row}", type="tertiary",
                      help="Remove this entry from the sheet", width="stretch"):
-            st.session_state[armed] = True
+            st.session_state[armed] = who
             st.rerun()
         return False
 
@@ -498,7 +456,7 @@ def delete_control(entry, scope: str) -> bool:
             forget_picks()
             st.toast("Entry deleted")
             st.rerun()
-    if st.button("Cancel", key=f"no_{scope}_{entry.row}", width="stretch"):
+    if st.button("Cancel", key=f"no_{scope}_{entry.row}", type="tertiary", width="stretch"):
         st.session_state[armed] = False
         st.rerun()
     return False
@@ -575,12 +533,12 @@ def _bulk_delete_bar(chosen: list, scope: str) -> None:
     st.warning(
         f"Delete these **{len(chosen)}** entries from the sheet?\n\n"
         + "\n".join(
-            f"- {e.date:%d %b %Y} · **{format_money(e.amount_minor, e.currency)}** "
-            f"{'gave' if e.signed_minor > 0 else 'got back'} · {e.person} · {e.ledger}"
+            f"- {e.date:%d %b %Y}: **{format_money(e.amount_minor, e.currency)}** "
+            f"{'gave' if e.signed_minor > 0 else 'got back'}, {e.person}, {e.ledger}"
             for e in chosen
         )
         + "\n\nEach one is archived to the **Deleted** tab first, so a restore "
-        "is possible — but the rows themselves go."
+        "is possible, but the rows themselves go."
     )
     go, stop = st.columns(2)
     if go.button(f"Delete {len(chosen)} entries", key=f"bgo_{scope}",
@@ -595,7 +553,7 @@ def _bulk_delete_bar(chosen: list, scope: str) -> None:
             # has to reload, and an error written here would vanish with it.
             st.session_state["bulk_problem"] = (
                 f"Deleted {gone} of {len(chosen)}. These stayed: "
-                + "; ".join(f"{e.person} {e.date:%d %b %Y} — {why}"
+                + "; ".join(f"{e.person} {e.date:%d %b %Y}: {why}"
                             for e, why in problems)
             )
         else:
@@ -631,17 +589,17 @@ def attachment_button(reference: str, key: str) -> None:
 
     stored = attach.get(reference)
     if stored is None:
-        st.caption("📎 attachment missing")
+        st.caption("Attachment missing")
         return
 
     if stored.mimetype.startswith("image/"):
-        st.image(stored.data, caption=stored.name, width="stretch")
+        st.image(stored.data, caption=md_plain(stored.name), width="stretch")
     else:
-        st.caption(f"📎 {stored.name} · {len(stored.data) // 1024} KB")
+        st.caption(f"{md_plain(stored.name)}, {len(stored.data) // 1024} KB")
 
     save, hide = st.columns(2)
     save.download_button(
-        "⬇ Save", data=stored.data, file_name=stored.name,
+        "Save", data=stored.data, file_name=stored.name, icon=":material/download:",
         mime=stored.mimetype, key=f"dl_{key}", width="stretch",
     )
     if hide.button("Close", key=f"hide_{key}", width="stretch"):
@@ -649,12 +607,64 @@ def attachment_button(reference: str, key: str) -> None:
         st.rerun()
 
 
-def _head_row(labels: list[str], widths: list[float]) -> None:
-    cells = st.columns(widths, vertical_alignment="bottom")
-    for cell, text in zip(cells, labels):
-        if text:
-            cell.markdown(f'<div class="khata-head">{text}</div>', unsafe_allow_html=True)
-    st.markdown('<hr class="khata-rule khata-rule-head">', unsafe_allow_html=True)
+def head_row(labels: list[str], widths: list[float], scope: str) -> None:
+    with st.container(key=f"khata-headrow-{scope}"):
+        cells = st.columns(widths, vertical_alignment="bottom")
+        for cell, text in zip(cells, labels):
+            if text:
+                cell.markdown(f'<div class="khata-head">{text}</div>', unsafe_allow_html=True)
+
+
+def table_html(rows: list[dict], *, numeric: tuple[str, ...] = (), lead: str = "") -> str:
+    """Rows as a ruled table. Every cell and heading is escaped here.
+
+    A value may be a `(text, tone)` pair, where tone is "out" or "back" and sets
+    the ink. The column's name goes on each cell as well, because on a phone the
+    heading row is hidden and each row restacks as labelled blocks. `lead` names
+    the column that is the answer: on a phone it stands beside the row's name
+    instead of fourth in the stack.
+    """
+    if not rows:
+        return ""
+    names = list(rows[0])
+
+    def classes(name: str, tone: str = "") -> str:
+        found = " ".join(
+            c for c in (
+                "khata-num" if name in numeric else "",
+                "khata-lead" if name == lead else "",
+                f"khata-{tone}" if tone else "",
+            ) if c
+        )
+        return f' class="{found}"' if found else ""
+
+    head = "".join(f'<th scope="col"{classes(n)}>{esc(n)}</th>' for n in names)
+    body = []
+    for row in rows:
+        cells = []
+        for place, name in enumerate(names):
+            value = row.get(name, "")
+            text, tone = value if isinstance(value, tuple) else (value, "")
+            if place == 0:
+                cells.append(f'<th scope="row">{esc(text)}</th>')
+            else:
+                cells.append(f'<td data-label="{esc(name)}"{classes(name, tone)}>{esc(text)}</td>')
+        body.append(f"<tr>{''.join(cells)}</tr>")
+    return (
+        f'<table class="khata-table"><thead><tr>{head}</tr></thead>'
+        f"<tbody>{''.join(body)}</tbody></table>"
+    )
+
+
+def ruled_table(rows: list[dict], *, numeric: tuple[str, ...] = (), lead: str = "") -> None:
+    """A table on the page's own rules, in place of a canvas `st.dataframe`.
+
+    A dataframe is drawn on a canvas: it cannot take the page's type or colours,
+    and on a phone it scrolls sideways with the figures out of sight. The cost is
+    its click-to-sort and CSV button; these tables are short and in a deliberate
+    order, and the Download page is where the data leaves.
+    """
+    st.html(table_html(rows, numeric=numeric, lead=lead))
 
 
 def entry_table(entries: list, scope: str, *, empty: str = "Nothing here yet.") -> None:
@@ -681,50 +691,50 @@ def entry_table(entries: list, scope: str, *, empty: str = "Nothing here yet.") 
     # above forty rows than below them, and this is the only way to have both.
     bar = st.container()
 
-    _head_row(_LEDGER_HEADS, _LEDGER_COLS)
+    head_row(_LEDGER_HEADS, _LEDGER_COLS, scope)
 
     chosen = []
-    for entry in entries:
-        pick, when, amount, book, note, edit, remove = st.columns(
-            _LEDGER_COLS, vertical_alignment="center"
-        )
-        if _pick_box(pick, entry, scope):
-            chosen.append(entry)
-        outgoing = entry.signed_minor > 0
-        when.markdown(
-            f'<div class="khata-cell">{entry.date:%d %b %Y}</div>', unsafe_allow_html=True
-        )
-        amount.markdown(
-            f'<div class="khata-cell khata-amount {"khata-out" if outgoing else "khata-back"}">'
-            f'{format_money(entry.amount_minor, entry.currency)}'
-            f'<span class="khata-dir"> {"gave" if outgoing else "got back"}</span></div>',
-            unsafe_allow_html=True,
-        )
-        book.markdown(
-            f'<div class="khata-cell">{esc(entry.ledger)}</div>', unsafe_allow_html=True
-        )
-        mark = _SOURCE_MARK.get(entry.source, "")
-        link = ""
-        if entry.attachment and not attachment_is_stored(entry.attachment):
-            href = safe_href(entry.attachment)
-            link = (
-                f' · <a href="{esc(href)}" target="_blank" rel="noopener noreferrer">'
-                "📎 link</a>"
-            ) if href else ' · <span class="khata-src">📎 link removed</span>'
-        with note:
-            st.markdown(
-                f'<div class="khata-cell khata-meta">{esc(entry.note) or "—"}'
-                + (f' <span class="khata-src">{mark}</span>' if mark else "")
-                + link + "</div>",
+    with st.container(key=f"khata-rows-entry-{scope}"):
+        for entry in entries:
+            pick, when, amount, book, note, edit, remove = st.columns(
+                _LEDGER_COLS, vertical_alignment="center"
+            )
+            if _pick_box(pick, entry, scope):
+                chosen.append(entry)
+            outgoing = entry.signed_minor > 0
+            when.markdown(
+                f'<div class="khata-cell">{entry.date:%d %b %Y}</div>', unsafe_allow_html=True
+            )
+            amount.markdown(
+                f'<div class="khata-cell khata-amount {"khata-out" if outgoing else "khata-back"}">'
+                f'{format_money(entry.amount_minor, entry.currency)}'
+                f'<span class="khata-dir"> {"gave" if outgoing else "got back"}</span></div>',
                 unsafe_allow_html=True,
             )
-            if entry.attachment and attachment_is_stored(entry.attachment):
-                attachment_button(entry.attachment, key=f"att_{scope}_{entry.row}")
-        with edit:
-            edit_control(entry, scope, [], [])
-        with remove:
-            delete_control(entry, scope)
-        st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
+            book.markdown(
+                f'<div class="khata-cell">{esc(entry.ledger)}</div>', unsafe_allow_html=True
+            )
+            mark = _SOURCE_MARK.get(entry.source, "")
+            link = ""
+            if entry.attachment and not attachment_is_stored(entry.attachment):
+                href = safe_href(entry.attachment)
+                link = (
+                    f' <a href="{esc(href)}" target="_blank" rel="noopener noreferrer">'
+                    "Attachment link</a>"
+                ) if href else ' <span class="khata-src">Link removed</span>'
+            with note:
+                st.markdown(
+                    f'<div class="khata-cell khata-meta">{esc_line(entry.note)}'
+                    + (f' <span class="khata-src">{mark}</span>' if mark else "")
+                    + link + "</div>",
+                    unsafe_allow_html=True,
+                )
+                if entry.attachment and attachment_is_stored(entry.attachment):
+                    attachment_button(entry.attachment, key=f"att_{scope}_{entry.row}")
+            with edit:
+                edit_control(entry, scope, [], [])
+            with remove:
+                delete_control(entry, scope)
 
     if chosen:
         with bar:
@@ -735,7 +745,7 @@ _SPEND_COLS = [2.3, 1.5, 1.7, 2.8, 1.35, 1.45]
 _SPEND_HEADS = ["When", "", "Category", "Detail", "", ""]
 
 
-@st.dialog("Edit transaction")
+@st.dialog("Edit transaction", width="medium")
 def _edit_transaction(t) -> None:
     from dataclasses import replace
 
@@ -762,7 +772,7 @@ def _edit_transaction(t) -> None:
         f"Amount ({t.currency.symbol}) *", value=f"{t.amount_minor / 100:.2f}")
     currency = currency_col.radio(
         "Currency", list(Currency), index=list(Currency).index(t.currency),
-        format_func=lambda c: f"{c.flag}  {c.label}", horizontal=True,
+        format_func=lambda c: f"{c.symbol}  {c.label}", horizontal=True,
     )
     description = st.text_input("Description", value=t.description)
     note = st.text_input("Note", value=t.note)
@@ -784,7 +794,7 @@ def _edit_transaction(t) -> None:
         except Exception as exc:  # noqa: BLE001 — surface what the sheet said
             st.error(f"Could not save: {exc}")
         else:
-            st.session_state["just_edited"] = f"{edited.category} · {edited.date:%d %b %Y}"
+            st.session_state["just_edited"] = f"{edited.category}, {edited.date:%d %b %Y}"
             st.rerun()
     if cancel.button("Cancel", width="stretch"):
         st.rerun()
@@ -802,42 +812,42 @@ def transaction_table(rows: list, scope: str, *, empty: str = "Nothing here yet.
         st.caption(empty)
         return
 
-    _head_row(_SPEND_HEADS, _SPEND_COLS)
+    head_row(_SPEND_HEADS, _SPEND_COLS, scope)
 
-    for t in rows:
-        when, amount, category, detail, edit, remove = st.columns(
-            _SPEND_COLS, vertical_alignment="center"
-        )
-        out = t.kind is spend.Kind.spent
-        when.markdown(
-            f'<div class="khata-cell">{t.period}'
-            + ('<span class="khata-src"> ongoing</span>' if t.ongoing else "")
-            + "</div>",
-            unsafe_allow_html=True,
-        )
-        amount.markdown(
-            f'<div class="khata-cell khata-amount {"khata-out" if out else "khata-back"}">'
-            f'{_fmt(t.amount_minor, t.currency)}</div>',
-            unsafe_allow_html=True,
-        )
-        category.markdown(
-            f'<div class="khata-cell">{esc(t.category)}</div>', unsafe_allow_html=True
-        )
-        bits = " · ".join(esc(x) for x in (t.description, t.note) if x) or "—"
-        mark = _SOURCE_MARK.get(t.source, "")
-        detail.markdown(
-            f'<div class="khata-cell khata-meta">{bits}'
-            + (f' <span class="khata-src">{mark}</span>' if mark else "")
-            + "</div>",
-            unsafe_allow_html=True,
-        )
-        with edit:
-            if t.row is not None and st.button("Edit", key=f"tedit_{scope}_{t.row}",
-                                               width="stretch"):
-                _edit_transaction(t)
-        with remove:
-            _remove_transaction(t, scope)
-        st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
+    with st.container(key=f"khata-rows-spend-{scope}"):
+        for t in rows:
+            when, amount, category, detail, edit, remove = st.columns(
+                _SPEND_COLS, vertical_alignment="center"
+            )
+            out = t.kind is spend.Kind.spent
+            when.markdown(
+                f'<div class="khata-cell">{t.period}'
+                + ('<span class="khata-src"> ongoing</span>' if t.ongoing else "")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+            amount.markdown(
+                f'<div class="khata-cell khata-amount {"khata-out" if out else "khata-back"}">'
+                f'{_fmt(t.amount_minor, t.currency)}</div>',
+                unsafe_allow_html=True,
+            )
+            category.markdown(
+                f'<div class="khata-cell">{esc(t.category)}</div>', unsafe_allow_html=True
+            )
+            bits = ". ".join(esc_line(x) for x in (t.description, t.note) if x)
+            mark = _SOURCE_MARK.get(t.source, "")
+            detail.markdown(
+                f'<div class="khata-cell khata-meta">{bits}'
+                + (f' <span class="khata-src">{mark}</span>' if mark else "")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+            with edit:
+                if t.row is not None and st.button("Edit", key=f"tedit_{scope}_{t.row}",
+                                                   type="tertiary", width="stretch"):
+                    _edit_transaction(t)
+            with remove:
+                _remove_transaction(t, scope)
 
 
 def _remove_transaction(t, scope: str) -> None:
@@ -848,7 +858,7 @@ def _remove_transaction(t, scope: str) -> None:
         return
     armed = f"tarm_{scope}_{t.row}"
     if not st.session_state.get(armed):
-        if st.button("Delete", key=f"tdel_{scope}_{t.row}", width="stretch"):
+        if st.button("Delete", key=f"tdel_{scope}_{t.row}", type="tertiary", width="stretch"):
             st.session_state[armed] = True
             st.rerun()
         return
@@ -865,6 +875,6 @@ def _remove_transaction(t, scope: str) -> None:
             st.session_state[armed] = False
             st.toast("Transaction deleted")
             st.rerun()
-    if st.button("Cancel", key=f"tno_{scope}_{t.row}", width="stretch"):
+    if st.button("Cancel", key=f"tno_{scope}_{t.row}", type="tertiary", width="stretch"):
         st.session_state[armed] = False
         st.rerun()

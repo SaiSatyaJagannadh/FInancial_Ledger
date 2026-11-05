@@ -1,4 +1,4 @@
-streamlit>=1.49  # st.navigation, width="stretch"
+streamlit>=1.66  # ledger/styles addresses this version's widget markup (stRadioOption, data-selected)
 pandas>=2.2
 altair>=5.3
 

@@ -172,6 +172,13 @@ def to_excel(entries: list[Entry], parents: dict | None = None) -> bytes:
             for index, width in enumerate([22, 30, 14, 14, 14, 14], start=1):
                 tab.column_dimensions[get_column_letter(index)].width = width
 
+    # Text that starts with "=" is stored by openpyxl as a live formula.
+    for ws in book.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.data_type == "f":
+                    cell.data_type = "s"
+
     buffer = io.BytesIO()
     book.save(buffer)
     return buffer.getvalue()
@@ -385,9 +392,9 @@ def summary_text(entries: list[Entry], *, today: date | None = None,
     """A short, readable statement of the ledger, for pasting into a message."""
     today = today or date.today()
     if not entries:
-        return f"Personal Ledger — {today:%d %b %Y}\nNothing recorded yet."
+        return f"Personal Ledger, {today:%d %b %Y}\nNothing recorded yet."
 
-    lines = [f"Personal Ledger — as of {today:%d %b %Y}", ""]
+    lines = [f"Personal Ledger, as of {today:%d %b %Y}", ""]
     for currency in Currency:
         subset = [e for e in entries if e.currency is currency]
         if not subset:

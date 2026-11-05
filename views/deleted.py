@@ -36,7 +36,7 @@ st.caption(
 )
 
 if result.demo:
-    st.info("Demo mode keeps no archive — there is no sheet to delete from.")
+    st.info("Demo mode keeps no archive, because there is no sheet to delete from.")
     st.stop()
 
 gone, problems = archive.load()
@@ -46,8 +46,8 @@ for problem in problems:
 if not gone:
     st.success("Nothing has been deleted.")
     st.caption(
-        "When something is, it will be kept here rather than disappearing — "
-        "the sheet itself has no undo."
+        "When something is, it will be kept here rather than disappearing, "
+        "because the sheet itself has no undo."
     )
     st.stop()
 
@@ -83,7 +83,8 @@ if search.strip():
         if needle in d.summary.lower() or needle in " ".join(d.data).lower()
     ]
 
-count_col, kinds_col, last_col = st.columns(3)
+with st.container(key="khata-figures"):
+    count_col, kinds_col, last_col = st.columns([1.4, 1.2, 1.2])
 count_col.metric("Showing", f"{len(shown)} of {len(gone)}")
 # Counted from KINDS rather than spelled out, so a fourth kind of deletion
 # appears here the moment it is archived instead of when somebody remembers.
@@ -91,66 +92,64 @@ kinds_col.metric(
     " / ".join(SHORT.get(k, KINDS[k]) for k in KINDS),
     " / ".join(str(sum(1 for d in shown if d.kind == k)) for k in KINDS),
 )
-last_col.metric("Most recent", gone[0].when if gone else "—")
-
-st.divider()
+last_col.metric("Most recent", gone[0].when if gone else "None")
 
 if not shown:
     st.info("Nothing matches those filters.")
     st.stop()
 
-for item in shown:
-    line, restore = st.columns([7, 1.6], vertical_alignment="center")
-    with line:
-        st.markdown(
-            f'<div class="khata-row">'
-            f'<span class="khata-amount khata-out">{esc(item.summary or "—")}</span>'
-            f'<span class="khata-dir">{esc(KINDS.get(item.kind, item.kind))}</span>'
-            f'<span class="khata-meta">· deleted {esc(item.when)}'
-            + (f" · by {esc(item.by)}" if item.by else " · sign-in was off")
-            + (f" · was row {item.source_row}" if item.source_row else "")
-            + "</span></div>",
-            unsafe_allow_html=True,
-        )
-        with st.expander("The row as it was"):
-            st.code("\n".join(str(cell) for cell in item.data) or "(nothing recorded)")
+with st.container(key="khata-rows-line-deleted"):
+    for item in shown:
+        line, restore = st.columns([7, 1.6], vertical_alignment="center")
+        with line:
+            st.markdown(
+                f'<div class="khata-row">'
+                f'<span class="khata-amount">{esc(item.summary)}</span>'
+                f'<span class="khata-dir">{esc(KINDS.get(item.kind, item.kind))}</span>'
+                f'<span class="khata-meta">Deleted {esc(item.when)}</span>'
+                + f'<span class="khata-meta">{f"By {esc(item.by)}" if item.by else "Sign-in was off"}</span>'
+                + (f'<span class="khata-meta">Was row {item.source_row}</span>' if item.source_row else "")
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+            with st.expander("The row as it was"):
+                st.code("\n".join(str(cell) for cell in item.data) or "(nothing recorded)")
 
-    with restore:
-        armed = f"restore_{item.row}"
-        if not st.session_state.get(armed):
-            if st.button("Restore", key=f"r_{item.row}", width="stretch",
-                         help="Write this record back as a new row"):
-                st.session_state[armed] = True
-                st.rerun()
-        else:
-            # Stacked, not split: this column is narrow enough that two
-            # buttons side by side come out as single truncated letters.
-            if st.button("Restore it", key=f"ry_{item.row}", type="primary",
-                         width="stretch"):
-                try:
-                    back = archive.restore(item)
-                except Exception as exc:  # noqa: BLE001 — say what the sheet said
-                    st.error(f"Could not restore: {exc}")
-                    st.session_state[armed] = False
-                else:
-                    clear_cache()
-                    st.session_state[armed] = False
-                    st.session_state["restored"] = True
-                    # A clearance has a payer where an entry has a person.
-                    named = (getattr(back, "person", "")
-                             or getattr(back, "payer", "") or "the record")
-                    st.session_state["restored_text"] = (
-                        f"Restored {named} — it is back on the sheet as a new row."
-                    )
+        with restore:
+            armed = f"restore_{item.row}"
+            if not st.session_state.get(armed):
+                if st.button("Restore", key=f"r_{item.row}", type="tertiary", width="stretch",
+                             help="Write this record back as a new row"):
+                    st.session_state[armed] = True
                     st.rerun()
-            if st.button("Cancel", key=f"rn_{item.row}", width="stretch"):
-                st.session_state[armed] = False
-                st.rerun()
-    st.markdown('<hr class="khata-rule">', unsafe_allow_html=True)
+            else:
+                # Stacked, not split: this column is narrow enough that two
+                # buttons side by side come out as single truncated letters.
+                if st.button("Restore it", key=f"ry_{item.row}", type="primary",
+                             width="stretch"):
+                    try:
+                        back = archive.restore(item)
+                    except Exception as exc:  # noqa: BLE001 — say what the sheet said
+                        st.error(f"Could not restore: {exc}")
+                        st.session_state[armed] = False
+                    else:
+                        clear_cache()
+                        st.session_state[armed] = False
+                        st.session_state["restored"] = True
+                        # A clearance has a payer where an entry has a person.
+                        named = (getattr(back, "person", "")
+                                 or getattr(back, "payer", "") or "the record")
+                        st.session_state["restored_text"] = (
+                            f"Restored {named}. It is back on the sheet as a new row."
+                        )
+                        st.rerun()
+                if st.button("Cancel", key=f"rn_{item.row}", type="tertiary", width="stretch"):
+                    st.session_state[armed] = False
+                    st.rerun()
 
 st.divider()
 st.caption(
     "A restored record comes back as a **new row at the bottom**, not in its old "
-    "position — everything below it moved up when it was removed, so the old row "
+    "position. Everything below it moved up when it was removed, so the old row "
     "number no longer means anything."
 )

@@ -1,0 +1,430 @@
+/* Hallmark · shape: app screen · genre: editorial (inferred) · theme: brand · redesign: full
+ * paper: oklch(97.3% 0.005 95) · accent: oklch(34.3% 0.070 252) · display: Newsreader · body: IBM Plex Sans
+ * nav: kept, the sidebar grouped into three · signature: the ruled page · states: empty, error, full; loading is Streamlit's own spinner, a skeleton is owed
+ * axes: light/roman-serif/cool · posture: restrained · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S5 R4 V3 · weakest: V, Streamlit fixes the shell and the widgets; the difference is carried by the rules, the type and how each screen is ordered */
+/* Hallmark · dropped #add-interest, add interest · the words stay as the label of the disclosure that now holds the form, which replaced the heading above it */
+/* Hallmark · dropped react-aria1629844174-:r1u:, react-aria5135572653-:r1f:, react-aria5135572653-:rb:, react-aria6135724395-:ra:, react-aria6135724395-:rk:, react-aria6569014431-:r1o:, react-aria6569014431-:r20:, react-aria7806873994-:r15: · Streamlit generates a new name for each radio group on every page load, so these can never match; every radio is still there */
+/* Hallmark · dropped https://wa.me/?text=Personal%20Ledger%20%E2%80%94%20as%20of%2002%20Nov%202026%0A%0AIndian%20Rupees%0A%20%20Given%20%20%20%20%20INR%20676%2C800.00%0A%20%20Received%20%20INR%20304%2C000.00%0A%20%20Still%20owed%20INR%20372%2C800.00%0A%0A%20%20Father%3A%20owes%20me%20INR%20188%2C900.00%20%20%28last%2024%20Jan%202026%29%0A%20%20Brother%3A%20owes%20me%20INR%20138%2C200.00%20%20%28last%2024%20Jul%202026%29%0A%20%20Ravi%20%28friend%29%3A%20owes%20me%20INR%2045%2C700.00%20%20%28last%2026%20Jul%202026%29%0A%0AUS%20Dollars%0A%20%20Given%20%20%20%20%20USD%207%2C350.00%0A%20%20Received%20%20USD%202%2C450.00%0A%20%20Still%20owed%20USD%204%2C900.00%0A%0A%20%20Priya%20%28cousin%29%3A%20owes%20me%20USD%202%2C700.00%20%20%28last%2030%20May%202026%29%0A%20%20Sam%20%28roommate%29%3A%20owes%20me%20USD%201%2C150.00%20%20%28last%2002%20Jul%202026%29%0A%20%20Brother%3A%20owes%20me%20USD%201%2C050.00%20%20%28last%2018%20Jun%202026%29, mailto:?subject=Personal%20Ledger&body=Personal%20Ledger%20%E2%80%94%20as%20of%2002%20Nov%202026%0A%0AIndian%20Rupees%0A%20%20Given%20%20%20%20%20INR%20676%2C800.00%0A%20%20Received%20%20INR%20304%2C000.00%0A%20%20Still%20owed%20INR%20372%2C800.00%0A%0A%20%20Father%3A%20owes%20me%20INR%20188%2C900.00%20%20%28last%2024%20Jan%202026%29%0A%20%20Brother%3A%20owes%20me%20INR%20138%2C200.00%20%20%28last%2024%20Jul%202026%29%0A%20%20Ravi%20%28friend%29%3A%20owes%20me%20INR%2045%2C700.00%20%20%28last%2026%20Jul%202026%29%0A%0AUS%20Dollars%0A%20%20Given%20%20%20%20%20USD%207%2C350.00%0A%20%20Received%20%20USD%202%2C450.00%0A%20%20Still%20owed%20USD%204%2C900.00%0A%0A%20%20Priya%20%28cousin%29%3A%20owes%20me%20USD%202%2C700.00%20%20%28last%2030%20May%202026%29%0A%20%20Sam%20%28roommate%29%3A%20owes%20me%20USD%201%2C150.00%20%20%28last%2002%20Jul%202026%29%0A%20%20Brother%3A%20owes%20me%20USD%201%2C050.00%20%20%28last%2018%20Jun%202026%29 · the WhatsApp and email links carry the summary as their text, and gate 19 changed its heading from a dash to a comma, so the URLs differ while the buttons go to the same places */
+/* Hallmark · finish-review: subagent · 8 findings · 7 resolved 1 partial (3: file exports, change-email subjects and the stored trail_note text keep their dashes) · gap: none · scored by the builder, including the Floor copy finding, which an AST scan checks */
+@import url("./tokens.css");
+@import url("./base.css");
+
+/* Streamlit's own widgets are addressed by data-testid and ARIA role, never by
+   the generated st-emotion-cache-* classes, which change between releases. */
+
+/* ------------------------------------------------------------------ canvas */
+[data-testid="stMainBlockContainer"] {
+  max-width: var(--container);
+  margin-inline: auto;
+  padding: var(--space-2xl) var(--gutter) var(--space-3xl);
+}
+[data-testid="stHeader"] { background: var(--color-paper); }
+[data-testid="stMainBlockContainer"] p,
+[data-testid="stMainBlockContainer"] li { max-width: 68ch; }
+hr { border-bottom-color: var(--color-rule) !important; margin-block: var(--space-md) !important; }
+
+/* Streamlit gives every markdown block margin-bottom: -1rem, to cancel the bottom
+   margin of the paragraph it expects inside. Markup with no paragraph in it (a
+   heading, a cell of a row) is then 16px shorter than what it holds, so the next
+   thing lands on top of it: a rule through the descenders of a title. */
+[data-testid="stHeading"] [data-testid="stMarkdownContainer"],
+[class*="st-key-khata-headrow"] [data-testid="stMarkdownContainer"],
+[class*="st-key-khata-rows"] [data-testid="stMarkdownContainer"] { margin-bottom: 0; }
+
+/* The one thing every page opens with: a double rule in ink under its name, as
+   at the head of a page in a khata. */
+[data-testid="stHeading"]:has(h1) {
+  border-bottom: 3px double var(--color-ink);
+  padding-bottom: var(--space-xs);
+  margin-bottom: var(--space-2xs);
+}
+[data-testid="stHeading"] h1,
+[data-testid="stHeading"] h2,
+[data-testid="stHeading"] h3 {
+  letter-spacing: var(--tracking-display);
+  line-height: 1.15;
+  padding-block: 0;
+}
+[data-testid="stHeading"] h3 { padding-top: var(--space-md); }
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p { color: var(--color-muted); opacity: 1; }
+[data-testid="stWidgetLabel"] p { color: var(--color-ink-2); font-size: var(--text-sm); }
+
+/* ------------------------------------------------------------------- chrome */
+@media (min-width: 40.01rem) {
+  [data-testid="stSidebar"] { min-width: var(--sidebar); max-width: var(--sidebar); }
+}
+[data-testid="stSidebar"] { border-right: 1px solid var(--color-rule); }
+[data-testid="stSidebarHeader"] { justify-content: space-between; align-items: center; }
+[data-testid="stSidebarHeader"]::before {
+  content: "Personal Ledger";
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+[data-testid="stLogoSpacer"] { display: none; }
+[data-testid="stSidebarNavLink"] { min-height: 36px; align-items: center; }
+[data-testid="stNavSectionHeader"] { color: var(--color-muted); font-size: var(--text-sm); }
+
+/* Home sits in the strip above the page, so it can never lie on top of a row
+   while the page scrolls under it. Beside the sidebar rather than at the right
+   edge, because the right edge is where Streamlit Cloud draws its own toolbar. */
+.st-key-khata-home {
+  position: fixed;
+  top: var(--space-sm);
+  left: calc(var(--sidebar) + var(--space-lg));
+  z-index: var(--z-over-header);
+  width: auto;
+}
+@media (max-width: 40rem) {
+  .st-key-khata-home { left: var(--space-2xl); top: var(--space-xs); }
+}
+
+/* ----------------------------------------------------------------- controls */
+button:focus-visible, a:focus-visible, summary:focus-visible, [role="tab"]:focus-visible {
+  outline: 2px solid var(--color-focus) !important;
+  outline-offset: 2px;
+}
+[data-testid="stTextInputRootElement"]:focus-within,
+[data-testid="stTextAreaRootElement"]:focus-within,
+[data-testid="stChatInput"]:focus-within,
+[data-testid="stSelectbox"] [role="group"]:focus-within,
+[data-testid="stMultiSelect"] [role="group"]:focus-within,
+[data-testid="stDateInputField"]:focus-within {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -1px;
+}
+input, textarea { font-size: var(--text-md) !important; }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+button:active:not(:disabled) { transform: translateY(1px); }
+[data-testid="stBaseButton-primary"],
+[data-testid="stBaseButton-secondary"],
+[data-testid="stLinkButton"] a,
+[data-testid="stBaseButton-secondaryFormSubmit"] { font-weight: 600; }
+
+/* A choice between a few is a row of labels you press, not a row of dots. The
+   real radio stays in the DOM, so the keyboard and a screen reader lose nothing. */
+[data-testid="stRadioGroup"] { flex-wrap: wrap; gap: var(--space-xs); }
+[data-testid="stRadioOption"] {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  margin: 0;
+  padding: 0 var(--space-md);
+  background: var(--color-sheet);
+  border: 1px solid var(--color-edge);
+  border-radius: var(--radius-card);
+  cursor: pointer;
+}
+[data-testid="stRadioOption"] > div > div:first-child { display: none; }
+[data-testid="stRadioOption"] p { font-size: var(--text-sm); }
+/* Selected is a state, not an action: it must not wear the fill of the one
+   primary button on the screen, or a dialog reads as three Save buttons. */
+[data-testid="stRadioOption"][data-selected="true"] {
+  background: var(--color-selected);
+  border-color: var(--color-accent);
+}
+[data-testid="stRadioOption"][data-selected="true"] p { color: var(--color-ink); font-weight: 600; }
+[data-testid="stRadioOption"]:has(input:focus-visible) {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+/* The input itself is clipped to nothing, and the ring above is what shows. This
+   only keeps the browser's own ring on it legible against the tint. */
+[data-testid="stRadioOption"][data-selected="true"] input:focus-visible { outline-color: var(--color-ink); }
+@media (hover: hover) {
+  [data-testid="stRadioOption"]:not([data-selected="true"]):hover { background: var(--color-paper-2); }
+}
+
+[data-testid="stMultiSelect"] input { min-height: 32px; }
+/* The edge goes on the wrapper that holds both the field and the send arrow, one
+   level in from where Streamlit draws it. Never on the textarea itself: its height
+   is measured, and a border there tips the box into its two-line layout. */
+[data-testid="stChatInput"] > div { border-color: transparent; background: transparent; padding: 0; }
+[data-testid="stChatInput"] > div > div {
+  background: var(--color-sheet);
+  border: 1px solid var(--color-edge);
+  border-radius: var(--radius-card);
+  padding: var(--space-xs) var(--space-sm);
+}
+[role="dialog"] h2 { font-family: var(--font-display); font-weight: 600; letter-spacing: var(--tracking-display); }
+
+[data-testid="stFileUploaderDropzone"] {
+  background: var(--color-sheet);
+  border: 1px dashed var(--color-edge);
+}
+
+/* A finger is bigger than a pointer. Applies on a coarse pointer at any width,
+   so a tablet gets it and a narrow desktop window does not. */
+@media (pointer: coarse) {
+  [data-testid="stBaseButton-primary"],
+  [data-testid="stBaseButton-secondary"],
+  [data-testid="stBaseButton-tertiary"],
+  [data-testid="stLinkButton"] a,
+  [data-testid="stRadioOption"],
+  [data-testid="stSidebarNavLink"],
+  [data-testid="stTextInputRootElement"],
+  [data-testid="stSelectbox"] [role="group"],
+  [data-testid="stDateInputField"] { min-height: 44px; }
+  [data-testid="stCheckbox"] label { align-items: center; min-width: 44px; min-height: 44px; }
+}
+
+/* -------------------------------------------------------------- disclosures */
+/* Expanders are rows on the page, not boxes on it. */
+[data-testid="stExpander"] details {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--color-rule);
+  border-radius: 0;
+}
+[data-testid="stExpander"] summary { padding: var(--space-sm) var(--space-xs); }
+[data-testid="stExpander"] details[open] > summary { background: transparent; border-bottom: 0; }
+[data-testid="stExpander"] summary p { font-weight: 600; }
+[data-testid="stExpanderDetails"] { padding: var(--space-xs) 0 var(--space-lg); }
+[class*="st-key-khata-list"] { gap: 0; }
+[class*="st-key-khata-list"] [data-testid="stExpanderDetails"] [data-testid="stVerticalBlock"] { gap: var(--space-md); }
+
+/* ------------------------------------------------------------------ figures */
+/* One figure leads and the rest stand beside it, parted by hairlines. Four equal
+   tiles say nothing about which number you came for. */
+[data-testid="stMetricLabel"] p { color: var(--color-muted); font-size: var(--text-sm); }
+[data-testid="stMetricValue"] {
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+[class*="st-key-khata-figures"] [data-testid="stHorizontalBlock"] { gap: 0; flex-wrap: nowrap; }
+[class*="st-key-khata-figures"] [data-testid="stColumn"] [data-testid="stVerticalBlock"] { gap: var(--space-2xs); }
+[class*="st-key-khata-figures"] [data-testid="stColumn"] {
+  padding-inline: var(--space-lg);
+  border-left: 1px solid var(--color-rule);
+  min-width: 0;
+}
+[class*="st-key-khata-figures"] [data-testid="stColumn"]:first-child { padding-left: 0; border-left: 0; }
+[class*="st-key-khata-figures"] [data-testid="stColumn"]:first-child [data-testid="stMetricValue"] {
+  font-size: var(--text-figure);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1.1;
+}
+[data-testid="stMetricLabel"] p,
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] div,
+[data-testid="stMetricValue"] p { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: break-word; }
+[data-testid="stMetricDelta"] { color: var(--color-muted); background: transparent; padding-inline: 0; }
+
+@media (max-width: 40rem) {
+  [class*="st-key-khata-figures"] [data-testid="stHorizontalBlock"] {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-md);
+  }
+  [class*="st-key-khata-figures"] [data-testid="stColumn"] {
+    width: auto;
+    padding-inline: 0;
+    border-left: 0;
+  }
+  [class*="st-key-khata-figures"] [data-testid="stColumn"]:first-child { grid-column: 1 / -1; }
+}
+
+/* ------------------------------------------------------------- ruled tables */
+.khata-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.khata-table th, .khata-table td {
+  padding: var(--space-sm) var(--space-md) var(--space-sm) 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-rule);
+  text-align: left;
+  vertical-align: baseline;
+  color: var(--color-ink);
+}
+.khata-table thead th {
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--color-muted);
+  border-bottom-color: var(--color-ink);
+  white-space: nowrap;
+}
+.khata-table tbody th { font-weight: 600; }
+.khata-table :is(th, td):last-child { padding-right: 0; }
+.khata-table .khata-num { text-align: right; }
+.khata-table td.khata-out { color: var(--color-out); font-weight: 600; }
+.khata-table td.khata-back { color: var(--color-back); font-weight: 600; }
+
+/* On a phone every row becomes a labelled block, because a table you scroll
+   sideways hides the very column you opened it for. */
+@media (max-width: 40rem) {
+  .khata-table thead { display: none; }
+  .khata-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-sm) var(--space-md);
+    padding-block: var(--space-md);
+    border-bottom: 1px solid var(--color-rule);
+  }
+  .khata-table tbody th { grid-column: 1 / -1; order: -2; padding: 0; border: 0; font-size: var(--text-lg); }
+  .khata-table tbody tr:has(.khata-lead) th { grid-column: 1; }
+  .khata-table tbody td, .khata-table tbody td.khata-num { padding: 0; border: 0; text-align: left; overflow-wrap: anywhere; }
+  .khata-table tbody td:empty { display: none; }
+  .khata-table tbody td.khata-lead { grid-column: 2; order: -1; text-align: right; }
+  .khata-table tbody td:not(.khata-num):last-child { grid-column: 1 / -1; }
+  .khata-table tbody td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: var(--text-sm);
+    font-weight: 400;
+    color: var(--color-muted);
+  }
+}
+
+/* ----------------------------------------------------------- rows of a ledger */
+/* A row is a line on the page. The hairline is the row's own edge, so there is
+   no extra element per row and no box around each one. */
+.khata-amount {
+  font-size: var(--text-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.khata-out { color: var(--color-out); }
+.khata-back { color: var(--color-back); }
+.khata-who { font-weight: 600; color: var(--color-ink); }
+.khata-meta { font-size: var(--text-sm); color: var(--color-muted); }
+.khata-src { font-style: italic; }
+.khata-dir { font-size: var(--text-sm); font-weight: 400; color: var(--color-muted); }
+.khata-head { font-size: var(--text-sm); color: var(--color-muted); }
+.khata-cell { line-height: 1.35; padding-block: var(--space-3xs); }
+.khata-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2xs) var(--space-sm);
+  padding-block: var(--space-2xs);
+}
+[class*="st-key-khata-headrow"] {
+  padding-bottom: var(--space-2xs);
+  border-bottom: 1px solid var(--color-ink);
+  gap: 0;
+}
+[class*="st-key-khata-rows"] { gap: 0; }
+[class*="st-key-khata-rows"] [data-testid="stExpander"] details { border-top: 0; }
+[class*="st-key-khata-rows"] [data-testid="stHorizontalBlock"]:not([data-testid="stColumn"] *) {
+  padding-block: var(--space-xs);
+  border-bottom: 1px solid var(--color-rule);
+}
+
+/* Text-only, so where they sit and the underline are all that says "press me":
+   Edit keeps to the row's left edge, Delete and Restore end on the rule. */
+[class*="st-key-khata-rows"] [data-testid="stBaseButton-tertiary"] { justify-content: flex-start; padding-inline: 0; }
+[class*="st-key-khata-rows"] [data-testid="stBaseButton-tertiary"] > div { justify-content: inherit; }
+[class*="st-key-khata-rows"] [data-testid="stBaseButton-tertiary"] p {
+  font-size: var(--text-sm);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+[class*="st-key-khata-rows"] [data-testid="stHorizontalBlock"]:not([data-testid="stColumn"] *) > [data-testid="stColumn"]:last-child [data-testid="stBaseButton-tertiary"] { justify-content: flex-end; }
+
+/* On a phone Streamlit stacks every column to full width, so one entry became
+   seven lines with its amount on the third. Each kind of row is laid out here
+   instead, by its column's place in the row. */
+@media (max-width: 40rem) {
+  [class*="st-key-khata-headrow"] { display: none; }
+  [class*="st-key-khata-rows"] [data-testid="stHorizontalBlock"]:not([data-testid="stColumn"] *) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2xs) var(--space-sm);
+    padding-block: var(--space-md);
+  }
+  [class*="st-key-khata-rows"] [data-testid="stHorizontalBlock"]:not([data-testid="stColumn"] *) > [data-testid="stColumn"] {
+    width: auto;
+    min-width: 0;
+  }
+
+  /* tick, date, amount, ledger, note, edit, delete */
+  [class*="st-key-khata-rows-entry"] [data-testid="stHorizontalBlock"]:not([data-testid="stColumn"] *) {
+    grid-template-columns: 2.75rem repeat(2, minmax(0, 1fr));
+    grid-template-areas: "pick amount when" ". book book" ". note note" ". edit remove";
+  }
+  [class*="st-key-khata-rows-entry"] [data-testid="stColumn"]:nth-child(1) { grid-area: pick; }
+  [class*="st-key-khata-rows-entry"] [data-testid="stColumn"]:nth-child(2) { grid-area: when; }
+  [class*="st-key-khata-rows-entry"] [data-testid="stColumn"]:nth-child(3) { grid-area: amount; }
+  [class*="st-key-khata-rows-entry"] [data-testid="stColumn"]:nth-child(4) { grid-area: book; }
+  [class*="st-key-khata-rows-entry"] [data-testid="stColumn"]:nth-child(5) { grid-area: note; }
+  [class*="st-key-khata-rows-entry"] [data-testid="stColumn"]:nth-child(6) { grid-area: edit; }
+  [class*="st-key-khata-rows-entry"] [data-testid="stColumn"]:nth-child(7) { grid-area: remove; }
+
+  /* when, amount, category, detail, edit, delete */
+  [class*="st-key-khata-rows-spend"] [data-testid="stHorizontalBlock"]:not([data-testid="stColumn"] *) {
+    grid-template-areas: "amount when" "book book" "note note" "edit remove";
+  }
+  [class*="st-key-khata-rows-spend"] [data-testid="stColumn"]:nth-child(1) { grid-area: when; }
+  [class*="st-key-khata-rows-spend"] [data-testid="stColumn"]:nth-child(2) { grid-area: amount; }
+  [class*="st-key-khata-rows-spend"] [data-testid="stColumn"]:nth-child(3) { grid-area: book; }
+  [class*="st-key-khata-rows-spend"] [data-testid="stColumn"]:nth-child(4) { grid-area: note; }
+  [class*="st-key-khata-rows-spend"] [data-testid="stColumn"]:nth-child(5) { grid-area: edit; }
+  [class*="st-key-khata-rows-spend"] [data-testid="stColumn"]:nth-child(6) { grid-area: remove; }
+
+  /* when, amount, who gave it, note, file, edit, delete */
+  [class*="st-key-khata-rows-clear"] [data-testid="stHorizontalBlock"]:not([data-testid="stColumn"] *) {
+    grid-template-areas: "amount when" "book book" "note note" "file file" "edit remove";
+  }
+  [class*="st-key-khata-rows-clear"] [data-testid="stColumn"]:nth-child(1) { grid-area: when; }
+  [class*="st-key-khata-rows-clear"] [data-testid="stColumn"]:nth-child(2) { grid-area: amount; }
+  [class*="st-key-khata-rows-clear"] [data-testid="stColumn"]:nth-child(3) { grid-area: book; }
+  [class*="st-key-khata-rows-clear"] [data-testid="stColumn"]:nth-child(4) { grid-area: note; }
+  [class*="st-key-khata-rows-clear"] [data-testid="stColumn"]:nth-child(5) { grid-area: file; }
+  [class*="st-key-khata-rows-clear"] [data-testid="stColumn"]:nth-child(6) { grid-area: edit; }
+  [class*="st-key-khata-rows-clear"] [data-testid="stColumn"]:nth-child(7) { grid-area: remove; }
+
+  /* amount, person, month, detail, edit, delete */
+  [class*="st-key-khata-rows-charge"] [data-testid="stHorizontalBlock"]:not([data-testid="stColumn"] *) {
+    grid-template-areas: "amount when" "book book" "note note" "edit remove";
+  }
+  [class*="st-key-khata-rows-charge"] [data-testid="stColumn"]:nth-child(1) { grid-area: amount; }
+  [class*="st-key-khata-rows-charge"] [data-testid="stColumn"]:nth-child(2) { grid-area: book; }
+  [class*="st-key-khata-rows-charge"] [data-testid="stColumn"]:nth-child(3) { grid-area: when; }
+  [class*="st-key-khata-rows-charge"] [data-testid="stColumn"]:nth-child(4) { grid-area: note; }
+  [class*="st-key-khata-rows-charge"] [data-testid="stColumn"]:nth-child(5) { grid-area: edit; }
+  [class*="st-key-khata-rows-charge"] [data-testid="stColumn"]:nth-child(6) { grid-area: remove; }
+
+  /* the whole line, then its action: deleted records */
+  [class*="st-key-khata-rows-line"] [data-testid="stHorizontalBlock"]:not([data-testid="stColumn"] *) > [data-testid="stColumn"]:first-child { grid-column: 1 / -1; }
+
+  /* The date reads against the amount beside it, so it sits at the far edge. */
+  [class*="st-key-khata-rows-entry"] [data-testid="stColumn"]:nth-child(2) .khata-cell,
+  [class*="st-key-khata-rows-spend"] [data-testid="stColumn"]:nth-child(1) .khata-cell,
+  [class*="st-key-khata-rows-clear"] [data-testid="stColumn"]:nth-child(1) .khata-cell,
+  [class*="st-key-khata-rows-charge"] [data-testid="stColumn"]:nth-child(3) .khata-cell { text-align: right; }
+}
+
+/* ------------------------------------------------------------------ the slip */
+/* What Save will write, beside Save. A tinted well, so what sits inside it is
+   text on the well rather than a box inside a box. */
+[class*="st-key-khata-slip"] {
+  position: sticky;
+  top: var(--space-2xl);
+  padding: var(--space-lg);
+  background: var(--color-paper-2);
+  border-radius: var(--radius-card);
+}
+[class*="st-key-khata-slip"] [data-testid="stAlertContainer"] { background: transparent; padding: 0; }
+@media (max-width: 40rem) {
+  [class*="st-key-khata-slip"] { position: static; }
+}
+
+/* --------------------------------------------------------------- the assistant */
+[data-testid="stChatMessage"] {
+  background: transparent;
+  padding: var(--space-md) 0;
+  border-bottom: 1px solid var(--color-rule);
+}
+[data-testid="stChatMessageAvatarAssistant"],
+[data-testid="stChatMessageAvatarUser"] { background: var(--color-ink); }
+[data-testid="stChatMessageAvatarAssistant"] *,
+[data-testid="stChatMessageAvatarUser"] * { color: var(--color-sheet); }

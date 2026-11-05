@@ -26,6 +26,24 @@ VISION_MODEL = "meta/llama-3.2-90b-vision-instruct"
 #: Vision requests inline the image as a data URI, which NVIDIA caps well below
 #: the sheet's own attachment limit.
 MAX_IMAGE_BYTES = 180 * 1024
+MAX_MESSAGE_CHARS = 2_000
+MAX_CALLS_PER_SESSION = 60
+
+
+def spend_model_call(state, text: str) -> str:
+    """Count one paid model call against this session, or say why not.
+
+    `state` is any mapping (st.session_state). Returns "" when the call may go
+    ahead. ponytail: per session, so a visitor opening new sessions gets a new
+    allowance; the sign-in gate is what limits who can open one.
+    """
+    if len(text) > MAX_MESSAGE_CHARS:
+        return f"That message is too long. Keep it under {MAX_MESSAGE_CHARS:,} characters."
+    used = state.get("model_calls", 0)
+    if used >= MAX_CALLS_PER_SESSION:
+        return "This session has used its allowance of assistant questions. Reload to start again."
+    state["model_calls"] = used + 1
+    return ""
 
 _SCHEMA = """Reply with ONLY a JSON object, no prose, no markdown fence.
 
@@ -288,7 +306,7 @@ def _post(payload: dict, api_key: str, timeout: int) -> str:
         except requests.exceptions.Timeout:
             last = (
                 f"The model did not answer within {timeout} seconds. "
-                "It is usually busy rather than broken — try again."
+                "It is usually busy rather than broken. Try again."
             )
         except requests.exceptions.ConnectionError:
             last = "Could not reach the model. Check the connection and try again."
@@ -359,6 +377,10 @@ def _to_charges(raw_rows, people: list[str] | None, said: str = "",
         if stated is not None:
             row["currency"] = stated.value
         row["source"] = BY_CHAT
+        # The review card shows none of these, so a model must not set them.
+        for hidden in ("kind", "paid", "moved_to", "attachment"):
+            if hidden in row:
+                row[hidden] = ""
 
         if not row["amount"].strip() and row["rate_percent"].strip() and entries:
             try:
@@ -381,7 +403,7 @@ def _to_charges(raw_rows, people: list[str] | None, said: str = "",
             if "amount" in str(exc) and row["rate_percent"].strip():
                 problems.append(
                     f"interest for {who}: {row['rate_percent']}% of nothing is "
-                    "nothing — they do not owe anything right now."
+                    "nothing: they do not owe anything right now."
                 )
             else:
                 problems.append(f"interest for {who}: {exc}")
