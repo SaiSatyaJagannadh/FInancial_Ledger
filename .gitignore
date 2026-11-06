@@ -451,3 +451,6 @@ __pycache__/
 !.oxlintrc.json
 *-service-account*.json
 ledger_secrets.toml
+
+# Design-tool cache (hallmark), local only
+.hallmark/
