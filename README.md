@@ -34,7 +34,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 That is the whole setup. With no credentials it opens in **demo mode** against
 sample data and says so — that is how you look at it before deciding whether to
-connect a sheet.
+connect a sheet. `requirements.txt` floors Streamlit at 1.66, because the
+stylesheet targets that version's widget markup.
 
 ## Connect your own sheet
 
@@ -137,10 +138,21 @@ amounts, and there is no way to read that screen which is true.
 | **Deleted** | Every removed row — ledger, interest or debt clearance — with what it said and when it went, and a way to put it back |
 | **Download** | Excel, PDF, or a summary to send by WhatsApp or email |
 
+## The look
+
+The app is drawn as a ruled ledger page in two inks: blue-black for the
+interface, with red and green kept only for which way money moved. Tables are
+ruled HTML rather than `st.dataframe`, so they use the page's type and fit a
+phone, where each row stays one compact line instead of stacking into seven.
+`design.md` is the locked system and `ledger/styles/` holds the CSS.
+`tests/test_theme.py` fails if the colours in `.streamlit/config.toml` drift
+from it.
+
 ## Optional, and off until configured
 
 Each of these is absent-means-off, so the app runs without any of them exactly
-as it did before they existed. All go in `.streamlit/secrets.toml` —
+as it did before they existed. A section that is present but half-filled stops
+the app with a message rather than running it open. All go in `.streamlit/secrets.toml` —
 `.streamlit/secrets.toml.example` carries the shape and the URLs to generate
 each credential.
 
@@ -149,7 +161,7 @@ each credential.
 | `[notify]` | An email whenever anything is added, edited or deleted, naming which fields changed and what they changed from and to. Needs a Gmail App Password |
 | `[auth]` | Google sign-in. Stores no password anywhere; the app only checks the address against your `allowed` list |
 | `[accounts] cookie_secret` | Optional. Signs the cookie that keeps you signed in across a refresh. Without it one is derived from the service-account key, so this only needs setting if you want to invalidate every session at will — changing it signs everybody out |
-| `[accounts] enabled = true` | Name/password accounts in a `users` tab instead, with sign-up and a reset. Weaker than `[auth]` — the hashes live in the workbook, so anyone who can *edit* the sheet is effectively an administrator |
+| `[accounts] enabled = true` | Name/password accounts in a `users` tab instead, with sign-up and a reset. Weaker than `[auth]` — the hashes live in the workbook, so anyone who can *edit* the sheet is effectively an administrator. With `[notify]` set, sign-up emails a six-digit code to the typed address and writes no account until it is entered; without it, notices mark the signer *(unverified)* |
 | `NVIDIA_API_KEY` | The Assistant page |
 
 Verify the email setup without showing anybody the password:
@@ -157,6 +169,25 @@ Verify the email setup without showing anybody the password:
 ```bash
 .venv/bin/python -m ledger.notify --test
 ```
+
+## Security
+
+A security audit in November 2026 led to these fixes, tested in
+`tests/test_security_fixes.py`:
+
+- Text starting `=`, `+`, `-` or `@` is written to the sheet as text, so a note
+  cannot become a formula. This was checked on a real sheet.
+- Markdown in notes and model answers is shown as plain text, so it cannot load
+  an outside image.
+- Failed sign-ins and emailed codes earn a growing wait per address and client
+  IP. It is a wait, not a lock, so a stranger cannot lock the owner out.
+- A remembered sign-in ends when the password changes or the account row is
+  removed.
+- Uploads are capped at 10 MB. Photos are shrunk, and a stored attachment stays
+  under 2 MB.
+
+One known limit: Sheets turns number-shaped text into a number, so a note of
+`007` reads back as `7`, `2.50` as `2.5`, and `+91…` loses its plus.
 
 ## Layout
 
@@ -185,6 +216,8 @@ ledger/
   export.py       xlsx, PDF, shareable summary
   demo.py         deterministic sample data
   ui.py           shared Streamlit pieces
+  styles/         tokens.css, base.css, ledger.css: the look
+design.md         the locked visual system
 ```
 
 `compute.py` holds all the arithmetic; the UI formats but never sums, so the
@@ -201,6 +234,10 @@ One Google Sheets workbook is the whole database — no SQL:
 | `transactions` | General spending, never summed into the ledger |
 | `clearances` | Old debts cleared between people, summed into nothing |
 | `attachments` | Uploaded files, base64 across cells |
+| `interest` | Monthly interest charges, never summed into the ledger |
+| `people` | Who rolls up under whom |
+| `deleted` | Every removed row, and how to put it back |
+| `users` | Name/password accounts, when `[accounts]` is on |
 
 Attachments live in the sheet rather than Drive because a service account has
 no Drive storage quota of its own, and sharing a folder with it does not help —
@@ -214,13 +251,16 @@ missing setting.
 .venv/bin/python -m pytest
 ```
 
-414 tests: money parsing and Indian formatting, entry validation, the
+912 tests, run by CI on every pull request and every push to `main`. They
+cover the security fixes, every page rendered through Streamlit's `AppTest`,
+the theme colours, round trips per operation, money parsing and Indian
+formatting, entry validation, the
 aggregates, filter consistency, messy-sheet tolerance, HTML escaping, the
 retry and its idempotency guard, compounding and settlement arithmetic, and an
 end-to-end load → append → reload over an in-memory sheet — plus the currency
 split: a dollar entry never moves a rupee total, and a mixed total raises.
 
-Several modules also carry a `demo()` self-check for the behaviour that is
+Fifteen modules also carry a `demo()` self-check for the behaviour that is
 awkward to unit-test — file round-trips, compounding, JSON parsing:
 
 ```bash
