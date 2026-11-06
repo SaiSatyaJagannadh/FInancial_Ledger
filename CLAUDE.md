@@ -616,10 +616,11 @@ two notices. Both are true; the second reads `moved_to: — → Vihar`.
 
 ## Known state
 
-- The deployed app is **private**: an anonymous request to either
-  `family-financialledger.streamlit.app` or
-  `saijagannadh-personal-ledger.streamlit.app` (both live, both this app) is
-  redirected to `share.streamlit.io/-/auth/app`, so viewers must sign in.
+- The deployed app is **private**: an anonymous request to
+  `family-financialledger.streamlit.app` is redirected to
+  `share.streamlit.io/-/auth/app`, so viewers must sign in. A second deployment,
+  `saijagannadh-personal-ledger.streamlit.app`, answered "no access or does not
+  exist" to the owner's Streamlit account on 2026-11-05.
   Authorisation *inside* the app now exists too, but only when `[auth]` is
   configured — see below. Without it the app is still open to anyone who can
   open it, and Streamlit's sharing list is the only gate.
