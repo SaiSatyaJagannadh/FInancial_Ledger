@@ -277,6 +277,23 @@ def attachment_field(entry, key: str = "edit"):
     return kept, upload
 
 
+def open_edit(dialog, *args) -> None:
+    """Open an edit dialog whose inputs start from the record, not from old typing.
+
+    Closing a dialog with its X does not rerun the app, so its inputs keep what
+    was typed. The next record opened then showed that typing wherever the two
+    records agreed (an empty note, the same date), and Save wrote it into the
+    wrong row. A new round per opening makes every input new.
+    """
+    st.session_state["_edit_round"] = st.session_state.get("_edit_round", 0) + 1
+    dialog(*args)
+
+
+def fk(name: str) -> str:
+    """An edit-dialog input's key for this opening (see `open_edit`)."""
+    return f"{name}~{st.session_state.get('_edit_round', 0)}"
+
+
 @st.dialog("Edit entry", width="medium")
 def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
     """Change any field of an existing entry, then write it back to its row."""
@@ -291,26 +308,28 @@ def _edit_dialog(entry, people: list[str], ledgers: list[str]) -> None:
         st.caption(f"Originally {origin}. Editing marks it as typed in.")
 
     who, which = st.columns(2)
-    person = who.text_input("Person", value=entry.person)
-    ledger_name = which.text_input("Ledger", value=entry.ledger)
+    person = who.text_input("Person", value=entry.person, key=fk("e_person"))
+    ledger_name = which.text_input("Ledger", value=entry.ledger, key=fk("e_ledger"))
 
     when_col, dir_col, amount_col = st.columns([1.2, 1.3, 1.2])
-    when = when_col.date_input("Date", value=entry.date, format="DD/MM/YYYY")
+    when = when_col.date_input("Date", value=entry.date, format="DD/MM/YYYY", key=fk("e_date"))
     direction = dir_col.radio(
         "Direction", list(Direction),
         index=list(Direction).index(entry.direction),
         format_func=lambda d: "I gave them" if d is Direction.given else "They gave me back",
+        key=fk("e_direction"),
     )
     amount = amount_col.text_input(
-        f"Amount ({entry.currency.symbol})", value=f"{entry.amount_minor / 100:.2f}"
+        f"Amount ({entry.currency.symbol})", value=f"{entry.amount_minor / 100:.2f}", key=fk("e_amount")
     )
 
     currency = st.radio(
         "Currency", list(Currency), index=list(Currency).index(entry.currency),
         format_func=lambda c: f"{c.symbol}  {c.label}", horizontal=True,
+        key=fk("e_currency"),
     )
-    note = st.text_input("Note", value=entry.note)
-    attachment, upload = attachment_field(entry)
+    note = st.text_input("Note", value=entry.note, key=fk("e_note"))
+    attachment, upload = attachment_field(entry, key=fk("edit"))
 
     problems: list[str] = []
     edited = None
@@ -412,7 +431,7 @@ def edit_control(entry, scope: str, people: list[str], ledgers: list[str]) -> No
         return
     if st.button("Edit", key=f"edit_{scope}_{entry.row}", type="tertiary",
                  help="Change this entry", width="stretch"):
-        _edit_dialog(entry, people, ledgers)
+        open_edit(_edit_dialog, entry, people, ledgers)
 
 
 def delete_control(entry, scope: str) -> bool:
@@ -756,26 +775,27 @@ def _edit_transaction(t) -> None:
     kind_col, cat_col = st.columns(2)
     kind = kind_col.radio(
         "Kind", list(spend.Kind), index=list(spend.Kind).index(t.kind),
-        format_func=lambda k: k.label, horizontal=True,
+        format_func=lambda k: k.label, horizontal=True, key=fk("t_kind"),
     )
-    category = cat_col.text_input("Category *", value=t.category)
+    category = cat_col.text_input("Category *", value=t.category, key=fk("t_category"))
 
     from_col, to_col = st.columns(2)
-    start = from_col.date_input("From *", value=t.date, format="DD/MM/YYYY")
-    ongoing = to_col.checkbox("Runs over a period", value=t.ongoing)
+    start = from_col.date_input("From *", value=t.date, format="DD/MM/YYYY", key=fk("t_from"))
+    ongoing = to_col.checkbox("Runs over a period", value=t.ongoing, key=fk("t_ongoing"))
     end = to_col.date_input(
-        "Until", value=t.end_date or t.date, format="DD/MM/YYYY"
+        "Until", value=t.end_date or t.date, format="DD/MM/YYYY", key=fk("t_until")
     ) if ongoing else None
 
     amount_col, currency_col = st.columns(2)
     amount = amount_col.text_input(
-        f"Amount ({t.currency.symbol}) *", value=f"{t.amount_minor / 100:.2f}")
+        f"Amount ({t.currency.symbol}) *", value=f"{t.amount_minor / 100:.2f}", key=fk("t_amount"))
     currency = currency_col.radio(
         "Currency", list(Currency), index=list(Currency).index(t.currency),
         format_func=lambda c: f"{c.symbol}  {c.label}", horizontal=True,
+        key=fk("t_currency"),
     )
-    description = st.text_input("Description", value=t.description)
-    note = st.text_input("Note", value=t.note)
+    description = st.text_input("Description", value=t.description, key=fk("t_description"))
+    note = st.text_input("Note", value=t.note, key=fk("t_note"))
 
     edited = None
     try:
@@ -845,7 +865,7 @@ def transaction_table(rows: list, scope: str, *, empty: str = "Nothing here yet.
             with edit:
                 if t.row is not None and st.button("Edit", key=f"tedit_{scope}_{t.row}",
                                                    type="tertiary", width="stretch"):
-                    _edit_transaction(t)
+                    open_edit(_edit_transaction, t)
             with remove:
                 _remove_transaction(t, scope)
 
