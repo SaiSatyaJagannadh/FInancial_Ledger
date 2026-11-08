@@ -20,6 +20,8 @@ from ledger import attach, clearance
 from ledger.models import BY_HAND, EntryError
 from ledger.money import Currency, format_money, spoken, to_minor
 from ledger.ui import (
+    fk,
+    open_edit,
     attachment_button, attachment_field, attachment_is_stored, demo_banner, esc,
     esc_line, load_ledger, md_plain, safe_href, styles,
 )
@@ -38,30 +40,30 @@ def edit_dialog(c: clearance.Clearance) -> None:
     that is two records — save this one and add the other.
     """
     who_col, under_col = st.columns(2)
-    payer_now = who_col.text_input("Who gave it", value=c.payer, key="cl_e_payer")
+    payer_now = who_col.text_input("Who gave it", value=c.payer, key=fk("cl_e_payer"))
     under_now = under_col.text_input(
-        "Given under", value=c.under, key="cl_e_under",
+        "Given under", value=c.under, key=fk("cl_e_under"),
         help="Whose old debt it clears. Changing this refiles the record.",
     )
 
     when_col, amount_col, currency_col = st.columns([1.3, 1.2, 1.5])
     when_now = when_col.date_input("Date", value=c.date, format="DD/MM/YYYY",
-                                   key="cl_e_date")
+                                   key=fk("cl_e_date"))
     amount_now = amount_col.text_input(
         f"Amount ({c.currency.symbol})", value=f"{c.amount_minor / 100:.2f}",
-        key="cl_e_amount",
+        key=fk("cl_e_amount"),
     )
     currency_now = currency_col.radio(
         "Currency", list(Currency), index=list(Currency).index(c.currency),
         format_func=lambda x: f"{x.symbol}  {x.label}", horizontal=True,
-        key="cl_e_currency",
+        key=fk("cl_e_currency"),
     )
-    note_now = st.text_input("Note", value=c.note, key="cl_e_note")
+    note_now = st.text_input("Note", value=c.note, key=fk("cl_e_note"))
 
     # The same attachment row the ledger's edit dialog uses: named rather than
     # previewed, because fetching the file reruns the app and a rerun inside a
     # dialog dismisses it, taking every field just typed with it.
-    kept, upload = attachment_field(c, key="cl_e")
+    kept, upload = attachment_field(c, key=fk("cl_e"))
 
     edited = None
     try:
@@ -349,7 +351,7 @@ for bucket in groups:
                 with edit_col:
                     if c.row is not None and st.button("Edit", key=f"cl_edit_{c.row}",
                                                        type="tertiary", width="stretch"):
-                        edit_dialog(c)
+                        open_edit(edit_dialog, c)
                 with remove_col:
                     # Two clicks, like everywhere else, and the row is archived
                     # to the Deleted page before it goes, so this is recoverable.

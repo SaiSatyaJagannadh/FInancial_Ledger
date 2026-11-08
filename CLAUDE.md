@@ -375,6 +375,12 @@ one) or a right-sized image. Photos within the 10 MB upload limit (`server.maxUp
   and `at.session_state[key]`. The error for a page link outside the router also
   changed its wording, so `HARNESS_GAP` in `tests/test_pages.py` matches the new one.
   Five tests went red on `main` for these reasons alone.
+- **Open an edit dialog with `ui.open_edit()` and key its inputs with `ui.fk()`.**
+  Closing a dialog with its X does not rerun the app, so its inputs keep what was
+  typed. The next record opened showed that typing wherever the two agreed (an
+  empty note, the same date), and Save wrote it into the wrong row. `open_edit`
+  starts a new round, so every input is new. `tests/test_edit_dialogs.py` fails
+  on an unkeyed input in any of the four dialogs.
 
 ### The look (`design.md`, `ledger/styles/`)
 
