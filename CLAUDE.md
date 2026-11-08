@@ -370,6 +370,11 @@ one) or a right-sized image. Photos within the 10 MB upload limit (`server.maxUp
 - **Anything interpolated into `unsafe_allow_html` must go through
   `ui.esc()`**, and any URL through `ui.safe_href()` (http/https only). Notes
   are free text and are also written by the model from uploaded documents.
+- **`AppTest` follows Streamlit's internals, which move.** In 1.66 it lost
+  `session_state.filtered_state`, so tests read state with `key in at.session_state`
+  and `at.session_state[key]`. The error for a page link outside the router also
+  changed its wording, so `HARNESS_GAP` in `tests/test_pages.py` matches the new one.
+  Five tests went red on `main` for these reasons alone.
 
 ### The look (`design.md`, `ledger/styles/`)
 
