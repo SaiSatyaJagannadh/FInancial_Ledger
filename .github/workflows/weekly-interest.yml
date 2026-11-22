@@ -1,0 +1,25 @@
+name: Weekly interest email
+
+on:
+  schedule:
+    - cron: "30 3 * * 1"   # Mondays 03:30 UTC = 09:00 in India
+  workflow_dispatch:        # "Run workflow" button, to test it now
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Send
+        env:
+          LEDGER_SECRETS_TOML: ${{ secrets.LEDGER_SECRETS_TOML }}
+          WEEKLY_EXTRA_TO: ${{ secrets.WEEKLY_EXTRA_TO }}
+        run: python -m ledger.weekly --send

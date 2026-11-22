@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Several `ledger/` modules carry a `demo()` self-check runnable as
 `python -m ledger.<module>`: `assistant`, `attach`, `docs`, `export`, `invest`,
 `accounts`, `archive`, `auth`, `clearance`, `facts`, `interest`, `notify`,
-`people`, `settle`, `spend`. These assert the behaviour that is awkward to unit-test
+`people`, `settle`, `spend`, `weekly`. These assert the behaviour that is awkward to unit-test
 (file round-trips, compounding maths, JSON parsing) and run in CI-adjacent
 fashion — keep them passing.
 
@@ -639,6 +639,12 @@ two notices. Both are true; the second reads `moved_to: — → Vihar`.
   right, but no page offers a move-money-inside-a-group action yet.
 - PDF exports print `INR`/`USD` rather than `₹` — fpdf's core fonts are
   latin-1 and the glyph raises.
+- **The weekly interest email** is `ledger/weekly.py`, run by
+  `.github/workflows/weekly-interest.yml` on Mondays at 09:00 IST, because
+  Streamlit Cloud cannot run anything on a schedule. It reads the GitHub secrets
+  `LEDGER_SECRETS_TOML` (the app's secrets file) and `WEEKLY_EXTRA_TO`, uses
+  `interest.still_due` so it matches the page, and refuses to send "nothing due"
+  when the tab could not be read. Its log never names a person or an amount.
 - NVIDIA's endpoint has no speech-to-text, so there is no voice input.
 - Sheets turns number-shaped text into a number before storing it, so a note of
   `+919876543210`, `007` or `2.50` reads back as `919876543210`, `7` or `2.5`. Checked on
