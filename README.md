@@ -170,6 +170,22 @@ Verify the email setup without showing anybody the password:
 .venv/bin/python -m ledger.notify --test
 ```
 
+## Weekly interest email
+
+Every Monday at 09:00 IST, GitHub Actions emails the interest still due, the
+same figures as the Interest page, to the `[notify]` address and one more.
+Streamlit Cloud cannot run anything on a schedule, so this runs on GitHub
+instead. Add two secrets under the repo's **Settings → Secrets and variables →
+Actions**:
+
+| Secret | Value |
+|---|---|
+| `LEDGER_SECRETS_TOML` | The app's whole secrets file, including `[notify]` with `to` and `password` |
+| `WEEKLY_EXTRA_TO` | The second address (optional) |
+
+Test it from **Actions → Weekly interest email → Run workflow**. The log says
+only whether it was sent.
+
 ## Security
 
 A security audit in November 2026 led to these fixes, tested in
