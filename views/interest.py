@@ -23,6 +23,8 @@ from ledger import attach, interest, people as grouping
 from ledger.compute import by_person
 from ledger.money import Currency, compact, format_money, to_minor
 from ledger.ui import (
+    fk,
+    open_edit,
     attachment_button, attachment_field, attachment_is_stored, clear_cache,
     demo_banner, head_row, load_ledger, ruled_table, safe_href, esc, esc_line,
     md_plain, styles,
@@ -465,12 +467,13 @@ def _edit(charge) -> None:
     amount = st.text_input(
         f"Amount ({charge.currency.symbol})",
         value=f"{charge.amount_minor / 100:.2f}",
+        key=fk("i_amount"),
     )
     choices = [interest.Kind.due.value, PARTLY, interest.Kind.given.value]
     now = PARTLY if charge.partly_paid else charge.kind.value
     happened = st.radio(
         "What happened", choices, index=choices.index(now),
-        format_func=STATUS_LABELS.get, horizontal=True,
+        format_func=STATUS_LABELS.get, horizontal=True, key=fk("i_happened"),
     )
     paid_now_text = ""
     clear_mark = False
@@ -479,9 +482,10 @@ def _edit(charge) -> None:
             f"Given so far ({charge.currency.symbol})",
             value=f"{charge.paid_minor / 100:.2f}" if charge.partly_paid else "",
             help="What has been handed over. The rest stays as still due.",
+            key=fk("i_paid"),
         )
-    note = st.text_input("Purpose", value=charge.note)
-    link, upload = attachment_field(charge, key="i")
+    note = st.text_input("Purpose", value=charge.note, key=fk("i_note"))
+    link, upload = attachment_field(charge, key=fk("i"))
 
     # Already handed on? Then this comes up ticked and pointed at the same
     # person, because the row in the ledger is matched by a trail carrying
@@ -499,13 +503,14 @@ def _edit(charge) -> None:
         value=moved_already,
         help="Writes a ledger entry for what was given, or corrects the one "
              "already there. Nothing is written unless this is ticked.",
+        key=fk("i_also"),
     )
     if moved_already and not also:
         # This page never removes a ledger row, so the mark stays with it —
         # clearing it would count the same money here and there at once.
         if interest.find_ledger_entry(result.entries, charge, charge.moved_to, None) is None:
             st.warning(f"{md_plain(charge.moved_to)}'s ledger entry for this is gone.")
-            clear_mark = st.checkbox("Count it as interest again (clear the hand-on mark)")
+            clear_mark = st.checkbox("Count it as interest again (clear the hand-on mark)", key=fk("i_clear"))
         else:
             st.warning(f"{md_plain(charge.moved_to)} already has this in the ledger. That entry "
                        "stays. Remove it on the ledger if it was a mistake.")
@@ -515,12 +520,14 @@ def _edit(charge) -> None:
         taker_now = take.selectbox(
             "Who took it", everyone,
             index=everyone.index(charge.moved_to) if moved_already else 0,
+            key=fk("i_taker"),
         )
         books = ledger_options(taker_now)
         held = interest.find_ledger_entry(result.entries, charge, taker_now, None)
         book_now = book.selectbox(
             "Onto which ledger", books,
             index=books.index(held.ledger) if held and held.ledger in books else 0,
+            key=fk("i_book"),
         )
 
     edited, problems = None, []
@@ -649,7 +656,7 @@ with st.container(key="khata-rows-charge"):
                 )
         with edit:
             if st.button("Edit", key=f"iedit_{charge.row}", type="tertiary", width="stretch"):
-                _edit(charge)
+                open_edit(_edit, charge)
         with remove:
             armed = f"iarm_{charge.row}"
             if not st.session_state.get(armed):
